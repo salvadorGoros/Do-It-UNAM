@@ -8,7 +8,14 @@ from django.core.exceptions import ValidationError
 
 IMAGE_DIRECTORY = Path(__file__).parent / "static" / "editor" / "images"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+UPLOADED_IMAGE_PATTERN = re.compile(
+    r"uploads/[1-9]\d*/[a-f0-9]{32}(?:_[a-zA-Z0-9_-]{1,60})?\.(?:png|jpg|webp)"
+)
 ANIMATION_PRESETS = {"ninguna", "aparecer", "subir", "zoom", "girar", "rebote"}
+MIN_OBJECT_POSITION = -8000
+MAX_OBJECT_POSITION = 8000
+MAX_OBJECT_WIDTH = 8000
+MAX_OBJECT_HEIGHT = 4500
 
 
 def imagenes_disponibles(seccion):
@@ -19,8 +26,8 @@ def imagenes_disponibles(seccion):
         return []
     return sorted(
         (
-            path.name
-            for path in directory.iterdir()
+            path.relative_to(directory).as_posix()
+            for path in directory.rglob("*")
             if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
         ),
         key=str.casefold,
@@ -30,17 +37,64 @@ def imagenes_disponibles(seccion):
 def ruta_imagen_valida(ruta, seccion):
     if not isinstance(ruta, str):
         return False
-    partes = ruta.split("/")
+    if seccion == "elementos" and UPLOADED_IMAGE_PATTERN.fullmatch(ruta):
+        return True
     return (
-        len(partes) == 2
-        and partes[0] == seccion
-        and partes[1] in imagenes_disponibles(seccion)
+        ruta.startswith(f"{seccion}/")
+        and ruta[len(seccion) + 1:] in imagenes_disponibles(seccion)
+    )
+
+
+def imagenes_pertenecen_usuario(diapositivas, usuario_id):
+    prefix = f"uploads/{usuario_id}/"
+    return all(
+        not obj["imagen"].startswith("uploads/")
+        or obj["imagen"].startswith(prefix)
+        for slide in diapositivas
+        for obj in slide["objetos"]
+        if obj.get("tipo") == "imagen"
     )
 
 
 def validar_fondo(fondo):
     if fondo and not ruta_imagen_valida(fondo, "fondos"):
         raise ValidationError("El fondo seleccionado no está disponible.")
+
+
+def validar_diapositivas(diapositivas):
+    def invalid():
+        raise ValidationError("Las diapositivas contienen datos inválidos.")
+
+    if not isinstance(diapositivas, list) or not 1 <= len(diapositivas) <= 100:
+        invalid()
+    for diapositiva in diapositivas:
+        required_keys = {"id", "objetos", "fondo", "duracion_frames"}
+        if (
+            not isinstance(diapositiva, dict)
+            or set(diapositiva) not in (required_keys, required_keys | {"color_fondo"})
+        ):
+            invalid()
+        if not isinstance(diapositiva["id"], str) or not re.fullmatch(
+            r"[a-zA-Z0-9_-]{1,64}", diapositiva["id"]
+        ):
+            invalid()
+        try:
+            validar_objetos(diapositiva["objetos"])
+            validar_fondo(diapositiva["fondo"])
+        except ValidationError:
+            invalid()
+        color_fondo = diapositiva.get("color_fondo", "#ffffff")
+        if not isinstance(color_fondo, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color_fondo):
+            invalid()
+        duracion = diapositiva["duracion_frames"]
+        if type(duracion) is not int or not 30 <= duracion <= 3600:
+            invalid()
+        if any(
+            key["frame"] > duracion
+            for obj in diapositiva["objetos"]
+            for key in obj["fotogramas"]
+        ):
+            invalid()
 
 
 def completar_animacion(objetos, anteriores=()):
@@ -83,12 +137,16 @@ def validar_objetos(objetos):
         ids.add(item["id"])
         if not isinstance(item["texto"], str) or len(item["texto"]) > 5000:
             invalid()
-        for field, low, high in [("x", 0, 800), ("y", 0, 450), ("ancho", 60, 800), ("alto", 30, 450), ("tamano", 8, 120)]:
+        for field, low, high in [
+            ("x", MIN_OBJECT_POSITION, MAX_OBJECT_POSITION),
+            ("y", MIN_OBJECT_POSITION, MAX_OBJECT_POSITION),
+            ("ancho", 60, MAX_OBJECT_WIDTH),
+            ("alto", 30, MAX_OBJECT_HEIGHT),
+            ("tamano", 8, 120),
+        ]:
             value = item[field]
             if type(value) not in (int, float) or not low <= value <= high or not math.isfinite(value):
                 invalid()
-        if item["x"] + item["ancho"] > 800.01 or item["y"] + item["alto"] > 450.01:
-            invalid()
         if item["fuente"] not in ("Poppins", "Arial") or item["alineacion"] not in ("left", "center", "right"):
             invalid()
         if not isinstance(item["color"], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", item["color"]):
@@ -105,7 +163,12 @@ def validar_objetos(objetos):
             if type(key["frame"]) is not int or not previous < key["frame"] <= 3600:
                 invalid()
             previous = key["frame"]
-            for field, low, high in [("x", 0, 800 - item["ancho"]), ("y", 0, 450 - item["alto"]), ("giro", -360, 360), ("opacidad", 0, 1)]:
+            for field, low, high in [
+                ("x", MIN_OBJECT_POSITION, MAX_OBJECT_POSITION),
+                ("y", MIN_OBJECT_POSITION, MAX_OBJECT_POSITION),
+                ("giro", -360, 360),
+                ("opacidad", 0, 1),
+            ]:
                 value = key[field]
                 if type(value) not in (int, float) or not low <= value <= high or not math.isfinite(value):
                     invalid()

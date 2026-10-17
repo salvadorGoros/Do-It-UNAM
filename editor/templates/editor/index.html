@@ -4,50 +4,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ proyecto.nombre }} · DO IT UNAM</title>
+    <title>{{ proyecto.nombre }}</title>
     <!-- Tailwind CSS para los estilos -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome para los iconos -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Fuente Poppins -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=1">
-    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=5">
+    <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=2">
+    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=28">
 </head>
 <body class="h-screen flex flex-col bg-[#f3f4f6] overflow-hidden text-gray-700">
 
     <!-- BARRA SUPERIOR (Navbar) -->
-    <header class="bg-white min-h-14 flex flex-wrap items-center justify-between gap-3 px-4 py-2 border-b border-gray-200 shrink-0">
-        <div class="flex flex-wrap items-center gap-4 min-w-0">
-            <div class="flex items-center gap-2 text-blue-900 font-bold text-lg">
-                <i class="fa-solid fa-graduation-cap text-yellow-500"></i> DO IT UNAM
-            </div>
-            <a href="{% url 'editor:index' %}" class="projects-logo" aria-label="Ir a Mis proyectos" title="Mis proyectos">
-                <img src="{% static 'editor/images/logo.png' %}?v=3" alt="Mis proyectos" width="44" height="44">
-            </a>
-            <form id="project-form" method="post" action="{% url 'editor:guardar' proyecto.pk %}" class="project-form">
-                {% csrf_token %}
-                {{ form.objetos }}
-                {{ form.fondo }}
-                {{ form.duracion_frames }}
-                <div class="project-field">
-                    {{ form.nombre.label_tag }}
-                    {{ form.nombre }}
-                    {{ form.nombre.errors }}
-                </div>
-                <button type="submit" class="project-save">Guardar</button>
-            </form>
+    <header class="editor-topbar">
+        <a href="{% url 'editor:index' %}" class="projects-logo" aria-label="Regresar a Mis proyectos" title="Mis proyectos">
+            <img src="{% static 'editor/images/logo.png' %}?v=4" alt="DO IT UNAM" width="52" height="52">
+        </a>
+        <div class="history-actions" aria-label="Historial">
+            <button id="undo-action" type="button" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" disabled>
+                <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+            </button>
+            <button id="redo-action" type="button" title="Rehacer (Ctrl+Y o Ctrl+Shift+Z)" aria-label="Rehacer" disabled>
+                <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+            </button>
         </div>
-        <div class="flex items-center gap-3">
-            <form method="post" action="{% url 'logout' %}">
-                {% csrf_token %}<button type="submit" class="text-sm text-blue-900 underline">Cerrar sesión</button>
-            </form>
-            <button class="bg-[#0b3b60] text-white px-4 py-1.5 rounded-md text-sm font-medium flex items-center gap-2 hover:bg-blue-900">
-                <i class="fa-solid fa-arrow-up-from-bracket"></i> Compartir
-            </button>
-            <button class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-600">
-                <i class="fa-solid fa-ellipsis"></i>
-            </button>
+        <form id="project-form" method="post" action="{% url 'editor:guardar' proyecto.pk %}" class="project-form">
+            {% csrf_token %}
+            {{ form.objetos }}
+            {{ form.fondo }}
+            {{ form.duracion_frames }}
+            {{ form.diapositivas }}
+            {{ form.diapositiva_activa }}
+            <button type="submit" class="project-save"><i class="fa-regular fa-floppy-disk" aria-hidden="true"></i> Guardar</button>
+            <div class="project-field">
+                {{ form.nombre.label_tag }}
+                {{ form.nombre }}
+                {{ form.nombre.errors }}
+            </div>
+        </form>
+        <div class="topbar-actions">
+            <button id="present-button" type="button" class="present-button">Presentar</button>
+            <details class="account-menu">
+                <summary aria-label="Menú de cuenta" title="Menú de cuenta">
+                    <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
+                </summary>
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}<button type="submit">Cerrar sesión</button>
+                </form>
+            </details>
+            <details class="share-menu">
+                <summary><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i> Compartir</summary>
+                <div class="share-menu-items">
+                    <a href="{% url 'editor:exportar' proyecto.pk 'pdf' %}"><i class="fa-regular fa-file-pdf" aria-hidden="true"></i> Descargar PDF</a>
+                    <a href="{% url 'editor:exportar' proyecto.pk 'pptx' %}"><i class="fa-regular fa-file-powerpoint" aria-hidden="true"></i> PowerPoint editable</a>
+                    <a href="{% url 'editor:exportar' proyecto.pk 'png' %}"><i class="fa-regular fa-images" aria-hidden="true"></i> Imágenes PNG (ZIP)</a>
+                </div>
+            </details>
         </div>
     </header>
     {% for message in messages %}
@@ -56,9 +69,9 @@
     {{ form.objetos.errors }}
     {{ form.duracion_frames.errors }}
     {{ form.non_field_errors }}
-    <div id="save-status" role="status" class="shrink-0 px-4 py-1 text-sm text-gray-600">{% if form.errors %}Revisa los campos indicados; los cambios no se guardaron.{% endif %}</div>
+    <div id="save-status" role="status" class="save-status" {% if not form.errors %}hidden{% endif %}>{% if form.errors %}Revisa los campos indicados; los cambios no se guardaron.{% endif %}</div>
 
-    <div class="flex flex-1 overflow-hidden">
+    <div id="editor-shell" class="flex flex-1 overflow-hidden">
         <!-- BARRA LATERAL IZQUIERDA -->
         <aside class="w-20 bg-white border-r border-gray-200 flex flex-col items-center py-4 gap-6 shrink-0 z-10 shadow-sm">
             <button id="text-tool" type="button" class="flex flex-col items-center gap-1 text-[#0b3b60] bg-blue-50 w-full py-2 border-l-4 border-[#0b3b60]">
@@ -67,7 +80,7 @@
             </button>
             <button id="images-tool" type="button" class="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-800 w-full py-2" aria-expanded="false" aria-controls="asset-panel">
                 <i class="fa-regular fa-image text-xl"></i>
-                <span class="text-[10px]">Imágenes</span>
+                <span class="text-[10px]">Subir</span>
             </button>
             <button class="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-800 w-full py-2">
                 <i class="fa-solid fa-wand-magic-sparkles text-xl"></i>
@@ -91,39 +104,85 @@
             </button>
         </aside>
 
-        <section id="asset-panel" class="asset-panel" aria-label="Biblioteca de imágenes" hidden>
+        <section id="asset-panel" class="asset-panel" aria-label="Biblioteca de recursos" hidden>
             <header class="asset-panel-header">
                 <h2 id="asset-panel-title">Biblioteca</h2>
                 <button id="close-asset-panel" type="button" aria-label="Cerrar biblioteca">×</button>
             </header>
             <div class="asset-gallery" data-gallery="elementos" hidden>
-                <p>Selecciona un elemento para agregarlo al lienzo.</p>
-                <div class="asset-grid">
-                    {% for asset in elementos %}
+                <div id="element-category-list">
+                    <h3 class="asset-section-title">Explora las categorías</h3>
+                    <div class="asset-category-grid">
+                        {% for grupo in elementos %}
+                        <button class="asset-category-choice" type="button" data-category-choice="{{ grupo.categoria }}" aria-label="Abrir categoría {{ grupo.categoria }}">
+                            <img src="{% static 'editor/images/' %}{{ grupo.assets.0.ruta }}" alt="" loading="lazy">
+                            <span>{{ grupo.categoria }}</span>
+                        </button>
+                        {% empty %}
+                        <p class="asset-empty">No hay elementos. Agrega imágenes a `editor/static/editor/images/elementos/`.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div id="element-category-content" hidden>
+                    <div class="asset-category-header">
+                        <button id="back-to-element-categories" class="asset-back" type="button">← Categorías</button>
+                        <h3 id="selected-element-category"></h3>
+                    </div>
+                {% for grupo in elementos %}
+                <section class="asset-category" data-category="{{ grupo.categoria }}" hidden>
+                    <div class="asset-grid">
+                    {% for asset in grupo.assets %}
                     <button class="asset-choice" type="button" data-asset-path="{{ asset.ruta }}" data-asset-src="{% static 'editor/images/' %}{{ asset.ruta }}" aria-label="Agregar {{ asset.nombre }}">
                         <img src="{% static 'editor/images/' %}{{ asset.ruta }}" alt="" loading="lazy">
                         <span>{{ asset.nombre }}</span>
                     </button>
-                    {% empty %}
-                    <p class="asset-empty">No hay elementos. Agrega imágenes a `editor/static/editor/images/elementos/`.</p>
                     {% endfor %}
+                    </div>
+                </section>
+                {% endfor %}
                 </div>
+            </div>
+            <div class="asset-gallery uploaded-image-gallery" data-gallery="imagenes" data-upload-url="{% url 'editor:subir_imagen' proyecto.pk %}" data-images-url="{% url 'editor:imagenes_subidas' %}" hidden>
+                <p>Sube y conserva tus imágenes para usarlas en cualquier diapositiva. PNG, JPEG o WEBP; máximo 15 MB por imagen y 10 por tanda.</p>
+                <input id="image-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+                <button id="upload-image-trigger" class="upload-image-button" type="button">
+                    <i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i> Subir imágenes
+                </button>
+                <button id="image-drop-zone" class="image-drop-zone" type="button">
+                    <i class="fa-regular fa-image" aria-hidden="true"></i>
+                    <span>Arrastra tus imágenes aquí o selecciónalas con el botón.</span>
+                </button>
+                <p id="image-upload-status" class="image-upload-status" role="status" aria-live="polite"></p>
+                <h3 class="asset-section-title">Mis imágenes</h3>
+                <div id="uploaded-image-grid" class="asset-grid" aria-live="polite"></div>
+                <p id="uploaded-image-empty" class="asset-empty">Todavía no has subido imágenes.</p>
             </div>
             <div class="asset-gallery" data-gallery="fondos" hidden>
                 <p>Selecciona un fondo para aplicarlo a la escena.</p>
                 <button id="clear-background" class="clear-background" type="button">Quitar fondo</button>
-                <div class="asset-grid">
-                    {% for asset in fondos %}
+                {% for grupo in fondos %}
+                <section class="asset-category">
+                    <h3>{{ grupo.categoria }}</h3>
+                    <div class="asset-grid">
+                    {% for asset in grupo.assets %}
                     <button class="asset-choice" type="button" data-asset-path="{{ asset.ruta }}" data-asset-src="{% static 'editor/images/' %}{{ asset.ruta }}" aria-label="Usar fondo {{ asset.nombre }}">
                         <img src="{% static 'editor/images/' %}{{ asset.ruta }}" alt="" loading="lazy">
                         <span>{{ asset.nombre }}</span>
                     </button>
-                    {% empty %}
-                    <p class="asset-empty">No hay fondos. Agrega imágenes a `editor/static/editor/images/fondos/`.</p>
                     {% endfor %}
-                </div>
+                    </div>
+                </section>
+                {% empty %}
+                <p class="asset-empty">No hay fondos. Agrega imágenes a `editor/static/editor/images/fondos/`.</p>
+                {% endfor %}
             </div>
             <div class="asset-gallery" data-gallery="animaciones" hidden>
+                <fieldset class="slide-duration-control">
+                    <legend>Diapositiva seleccionada</legend>
+                    <label for="slide-duration">Duración en Presentar</label>
+                    <div><input id="slide-duration" type="number" min="1" max="120" value="10"><span>segundos</span></div>
+                    <small>Tiempo antes de avanzar automáticamente a la siguiente diapositiva.</small>
+                </fieldset>
                 <p id="animation-selection">Selecciona un texto o elemento para aplicarle una animación.</p>
                 <div class="animation-presets">
                     <button class="animation-choice" type="button" data-animation="ninguna"><span>Sin animación</span><small>Mostrar estático</small></button>
@@ -133,6 +192,13 @@
                     <button class="animation-choice" type="button" data-animation="girar"><span>Girar</span><small>Entra girando</small></button>
                     <button class="animation-choice" type="button" data-animation="rebote"><span>Rebote</span><small>Entra con rebote</small></button>
                 </div>
+                <label class="animation-scope-label" for="animation-scope">Aplicar a</label>
+                <select id="animation-scope">
+                    <option value="objeto">Objeto seleccionado</option>
+                    <option value="diapositiva">Todos los objetos de esta diapositiva</option>
+                    <option value="presentacion">Todas las diapositivas</option>
+                </select>
+                <p class="animation-scope-help">En Presentar, el efecto se reproduce al entrar a cada diapositiva.</p>
                 <button id="preview-animation" class="preview-animation" type="button">Vista previa</button>
                 <p id="animation-status" role="status" aria-live="polite">Elige un objeto y un efecto.</p>
             </div>
@@ -141,33 +207,89 @@
         <!-- ÁREA CENTRAL DE TRABAJO -->
         <div class="editor-layout">
         <main class="editor-workspace flex-1 flex flex-col relative">
-            <div class="text-toolbar" aria-label="Herramientas de texto">
-                <button id="add-text" type="button">+ Agregar texto</button>
+            <div id="text-toolbar" class="text-toolbar" aria-label="Herramientas de texto" hidden>
                 <fieldset id="object-tools" disabled>
                     <legend class="sr-only">Formato del cuadro seleccionado</legend>
                     <label>Fuente <select id="font-family"><option>Poppins</option><option>Arial</option></select></label>
                     <label>Tamaño <input id="font-size" type="number" min="8" max="120" value="36"></label>
-                    <label>Color <input id="font-color" type="color" value="#ffffff"></label>
+                    <label class="custom-color-label">Color
+                        <span class="custom-color-wheel" title="Elegir un color personalizado">
+                            <input id="font-color" type="color" value="#ffffff" aria-label="Elegir color personalizado">
+                            <span aria-hidden="true">+</span>
+                        </span>
+                    </label>
+                    <div class="recommended-colors" aria-label="Colores recomendados">
+                        <span>Colores</span>
+                        <button type="button" data-text-color="#ffffff" style="--swatch:#ffffff" aria-label="Color blanco"></button>
+                        <button type="button" data-text-color="#0f172a" style="--swatch:#0f172a" aria-label="Color negro"></button>
+                        <button type="button" data-text-color="#ef4444" style="--swatch:#ef4444" aria-label="Color rojo"></button>
+                        <button type="button" data-text-color="#f97316" style="--swatch:#f97316" aria-label="Color naranja"></button>
+                        <button type="button" data-text-color="#facc15" style="--swatch:#facc15" aria-label="Color amarillo"></button>
+                        <button type="button" data-text-color="#22c55e" style="--swatch:#22c55e" aria-label="Color verde"></button>
+                        <button type="button" data-text-color="#06b6d4" style="--swatch:#06b6d4" aria-label="Color cian"></button>
+                        <button type="button" data-text-color="#3b82f6" style="--swatch:#3b82f6" aria-label="Color azul"></button>
+                        <button type="button" data-text-color="#8b5cf6" style="--swatch:#8b5cf6" aria-label="Color violeta"></button>
+                        <button type="button" data-text-color="#ec4899" style="--swatch:#ec4899" aria-label="Color rosa"></button>
+                    </div>
                     <button id="bold" type="button" aria-label="Negrita" aria-pressed="false"><b>B</b></button>
                     <button id="italic" type="button" aria-label="Cursiva" aria-pressed="false"><i>I</i></button>
                     <button id="underline" type="button" aria-label="Subrayado" aria-pressed="false"><u>U</u></button>
                     <label>Alinear <select id="text-align"><option value="left">Izquierda</option><option value="center">Centro</option><option value="right">Derecha</option></select></label>
                     <button id="edit-text" type="button">Editar</button>
                     <button id="delete-text" type="button">Eliminar</button>
+                    <button id="copy-object" type="button" disabled>Copiar objeto</button>
+                    <button id="paste-object" type="button" disabled>Pegar objeto</button>
                 </fieldset>
             </div>
-            <p class="editor-help">Agrega texto. Arrastra el cuadro para moverlo y su esquina para cambiar el tamaño. Doble clic para escribir; Escape para terminar.</p>
+            <div id="slide-color-toolbar" class="text-toolbar" aria-label="Color de la diapositiva" hidden>
+                <fieldset>
+                    <legend class="sr-only">Color de fondo de la diapositiva seleccionada</legend>
+                    <label class="custom-color-label">Fondo
+                        <span class="custom-color-wheel" title="Elegir un color personalizado">
+                            <input id="slide-custom-color" type="color" value="#ffffff" aria-label="Elegir color personalizado para la diapositiva">
+                            <span aria-hidden="true">+</span>
+                        </span>
+                    </label>
+                    <div class="recommended-colors" aria-label="Colores recomendados para la diapositiva">
+                        <span>Colores</span>
+                        <button type="button" data-slide-color="#ffffff" style="--swatch:#ffffff" aria-label="Fondo blanco"></button>
+                        <button type="button" data-slide-color="#0f172a" style="--swatch:#0f172a" aria-label="Fondo negro"></button>
+                        <button type="button" data-slide-color="#ef4444" style="--swatch:#ef4444" aria-label="Fondo rojo"></button>
+                        <button type="button" data-slide-color="#f97316" style="--swatch:#f97316" aria-label="Fondo naranja"></button>
+                        <button type="button" data-slide-color="#facc15" style="--swatch:#facc15" aria-label="Fondo amarillo"></button>
+                        <button type="button" data-slide-color="#22c55e" style="--swatch:#22c55e" aria-label="Fondo verde"></button>
+                        <button type="button" data-slide-color="#06b6d4" style="--swatch:#06b6d4" aria-label="Fondo cian"></button>
+                        <button type="button" data-slide-color="#3b82f6" style="--swatch:#3b82f6" aria-label="Fondo azul"></button>
+                        <button type="button" data-slide-color="#8b5cf6" style="--swatch:#8b5cf6" aria-label="Fondo violeta"></button>
+                        <button type="button" data-slide-color="#ec4899" style="--swatch:#ec4899" aria-label="Fondo rosa"></button>
+                    </div>
+                </fieldset>
+            </div>
             <div class="stage-area">
                 <div id="stage-viewport">
-                    <div id="stage" class="canvas-bg" data-asset-base="{% static 'editor/images/' %}" aria-label="Lienzo de animación" tabindex="0"></div>
+                    <div id="stage" class="canvas-bg" data-asset-base="{% static 'editor/images/' %}" data-uploaded-image-base="{% url 'editor:imagenes_subidas' %}" aria-label="Lienzo de animación" tabindex="0"></div>
+                </div>
+                <div id="presentation-controls" class="presentation-controls" hidden>
+                    <button id="exit-presentation" type="button">Salir</button>
+                    <button id="previous-slide" type="button" aria-label="Diapositiva anterior">←</button>
+                    <span id="presentation-count"></span>
+                    <button id="next-slide" type="button" aria-label="Diapositiva siguiente">→</button>
                 </div>
             </div>
+            <footer class="slide-footer" aria-label="Diapositivas">
+                <div id="slide-list" class="slide-list"></div>
+                <div id="slide-context-menu" class="slide-context-menu" role="menu" aria-label="Opciones de diapositiva" hidden>
+                    <button id="duplicate-slide" type="button" role="menuitem"><i class="fa-regular fa-copy" aria-hidden="true"></i> Duplicar diapositiva</button>
+                    <button id="copy-slide" type="button" role="menuitem"><i class="fa-regular fa-clipboard" aria-hidden="true"></i> Copiar diapositiva</button>
+                    <button id="delete-slide" type="button" role="menuitem"><i class="fa-regular fa-trash-can" aria-hidden="true"></i> Eliminar diapositiva</button>
+                </div>
+            </footer>
             <noscript><p>Activa JavaScript para agregar y editar cuadros de texto.</p></noscript>
         </main>
         </div>
     </div>
     <span id="object-count" class="sr-only"></span>
     {{ objetos|json_script:"scene-data" }}
-    <script src="{% static 'editor/js/editor.js' %}?v=4" defer></script>
+    <script src="{% static 'editor/js/editor.js' %}?v=28" defer></script>
 </body>
 </html>

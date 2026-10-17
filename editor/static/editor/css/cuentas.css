@@ -5,7 +5,7 @@ a { color: #0b3b60; }
 .site-header { min-height: 64px; background: white; border-bottom: 1px solid #e5e7eb; padding: 14px 5%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 .brand { font-weight: 700; font-size: 20px; text-decoration: none; }
 .brand span { color: #926800; }
-.brand-logo { display: block; width: 44px; height: 44px; border-radius: 6px; object-fit: cover; }
+.brand-logo { display: block; width: 52px; height: 52px; object-fit: contain; }
 .account { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; overflow-wrap: anywhere; }
 .page { max-width: 1100px; margin: 40px auto; padding: 0 24px; }
 h1 { color: #0b3b60; margin-bottom: 8px; }

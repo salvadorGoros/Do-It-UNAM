@@ -1,14 +1,22 @@
 import json
+import tempfile
+from io import BytesIO
+from zipfile import ZipFile
 from copy import deepcopy
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
+from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
+from pptx import Presentation
 
+from .exports import exportar_imagenes
 from .models import Proyecto
-from .scene import imagenes_disponibles
+from .scene import imagenes_disponibles, validar_diapositivas
 
 
 class ProyectoTests(TestCase):
@@ -109,15 +117,15 @@ class ProyectoTests(TestCase):
         self.assertContains(self.client.get("/"), "Aún no tienes proyectos")
 
     def test_logo_enlace_y_favicon_en_editor_y_proyectos(self):
-        logo = "/static/editor/images/logo.png?v=3"
+        logo = "/static/editor/images/logo.png?v=4"
         proyectos = self.client.get("/")
         editor = self.client.get(self.detalle)
-        favicon = '<link rel="icon" type="image/png" href="/static/editor/images/favicon.png?v=1">'
+        favicon = '<link rel="icon" type="image/png" href="/static/editor/images/favicon.png?v=2">'
         self.assertContains(proyectos, favicon)
-        self.assertContains(proyectos, f'<img class="brand-logo" src="{logo}" alt="DO IT UNAM" width="44" height="44">')
+        self.assertContains(proyectos, f'<img class="brand-logo" src="{logo}" alt="DO IT UNAM" width="52" height="52">')
         self.assertContains(editor, favicon)
-        self.assertContains(editor, f'<img src="{logo}" alt="Mis proyectos" width="44" height="44">')
-        self.assertContains(editor, 'href="/" class="projects-logo"')
+        self.assertContains(editor, f'<img src="{logo}" alt="DO IT UNAM" width="52" height="52">')
+        self.assertContains(editor, 'href="/" class="projects-logo" aria-label="Regresar a Mis proyectos"')
 
     def test_crear_ignora_propietario_enviado_y_permite_repetidos(self):
         for _ in range(2):
@@ -195,7 +203,7 @@ class ProyectoTests(TestCase):
     def test_proyecto_nuevo_sin_textos_fijos(self):
         self.assertEqual(self.proyecto.objetos, [])
         response = self.client.get(self.detalle)
-        self.assertContains(response, "Agregar texto")
+        self.assertContains(response, 'id="text-tool"')
         self.assertNotContains(response, 'id="id_titulo"')
 
     def test_galerias_muestran_imagenes_disponibles(self):
@@ -204,10 +212,78 @@ class ProyectoTests(TestCase):
         fondos = imagenes_disponibles("fondos")
         self.assertTrue(elementos)
         self.assertTrue(fondos)
-        self.assertEqual(len(response.context["elementos"]), len(elementos))
-        self.assertEqual(len(response.context["fondos"]), len(fondos))
+        self.assertEqual(sum(len(grupo["assets"]) for grupo in response.context["elementos"]), len(elementos))
+        self.assertEqual(sum(len(grupo["assets"]) for grupo in response.context["fondos"]), len(fondos))
         self.assertContains(response, f'data-asset-path="elementos/{elementos[0]}"')
         self.assertContains(response, f'data-asset-path="fondos/{fondos[0]}"')
+        self.assertIn("Personajes de la FESC", [grupo["categoria"] for grupo in response.context["elementos"]])
+
+    def test_subir_imagen_persiste_en_biblioteca_privada(self):
+        image_data = BytesIO()
+        Image.new("RGB", (12, 8), "red").save(image_data, format="PNG")
+        image_data.seek(0)
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            response = self.client.post(
+                reverse("editor:subir_imagen", args=[self.proyecto.pk]),
+                {"images": SimpleUploadedFile("mifoto.png", image_data.getvalue(), content_type="image/png")},
+            )
+            self.assertEqual(response.status_code, 201)
+            uploaded = response.json()["images"][0]
+            self.assertRegex(
+                uploaded["path"],
+                rf"^uploads/{self.usuario.pk}/[a-f0-9]{{32}}(?:_[a-zA-Z0-9_-]{{1,60}})?\.png$",
+            )
+            library = self.client.get(reverse("editor:imagenes_subidas"))
+            self.assertEqual(library["Cache-Control"], "private, no-store")
+            self.assertEqual(library.json()["images"], [uploaded])
+            image_response = self.client.get(uploaded["url"])
+            self.assertEqual(image_response.status_code, 200)
+            self.assertEqual(image_response["Content-Type"], "image/png")
+            self.assertEqual(b"".join(image_response.streaming_content), image_data.getvalue())
+
+            objeto = self.cuadro(tipo="imagen", imagen=uploaded["path"], texto="")
+            exported = exportar_imagenes([{
+                "objetos": [objeto],
+                "fondo": "",
+                "color_fondo": "#ffffff",
+            }])
+            with ZipFile(BytesIO(exported)) as archive:
+                with Image.open(BytesIO(archive.read("diapositiva-1.png"))) as slide_image:
+                    self.assertEqual(slide_image.size, (1600, 900))
+
+            otro_cliente = Client()
+            otro_cliente.force_login(self.otro)
+            self.assertEqual(otro_cliente.get(uploaded["url"]).status_code, 404)
+            self.client.logout()
+            self.assertEqual(self.client.get(uploaded["url"]).status_code, 302)
+
+    def test_subida_rechaza_archivos_que_no_sean_imagenes(self):
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            response = self.client.post(
+                reverse("editor:subir_imagen", args=[self.proyecto.pk]),
+                {"images": SimpleUploadedFile("imagen.png", b"esto no es una imagen", content_type="image/png")},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("imagen válida", response.json()["error"])
+            self.assertEqual(self.client.get(reverse("editor:imagenes_subidas")).json()["images"], [])
+
+    def test_guardado_rechaza_imagen_subida_de_otro_usuario(self):
+        image_data = BytesIO()
+        Image.new("RGB", (4, 4), "blue").save(image_data, format="PNG")
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            otro_cliente = Client()
+            otro_cliente.force_login(self.otro)
+            upload = otro_cliente.post(
+                reverse("editor:subir_imagen", args=[self.ajeno.pk]),
+                {"images": SimpleUploadedFile("ajena.png", image_data.getvalue(), content_type="image/png")},
+            )
+            image_path = upload.json()["images"][0]["path"]
+            objeto = self.cuadro(tipo="imagen", imagen=image_path, texto="")
+            response = self.client.post(self.guardar, {"nombre": "Imagen ajena", "objetos": json.dumps([objeto])})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("no pertenece", response.context["form"].errors["diapositivas"][0])
+            self.proyecto.refresh_from_db()
+            self.assertEqual(self.proyecto.objetos, [])
 
     def test_elementos_y_fondos_se_guardan_y_recuperan(self):
         elemento = self.cuadro(tipo="imagen", imagen=f"elementos/{imagenes_disponibles('elementos')[0]}", texto="")
@@ -224,6 +300,73 @@ class ProyectoTests(TestCase):
         editor = self.client.get(self.detalle)
         self.assertEqual(editor.context["form"]["fondo"].value(), fondo)
         self.assertContains(editor, f'data-asset-path="{elemento["imagen"]}"')
+
+    def test_diapositivas_guardan_contenido_independiente_y_duracion(self):
+        primero = self.cuadro(texto="Primera hoja")
+        segundo = self.cuadro(id="cuadro-2", texto="Segunda hoja", x=300)
+        slides = [
+            {"id": "slide-1", "objetos": [primero], "fondo": "", "color_fondo": "#dbeafe", "duracion_frames": 300},
+            {"id": "slide-2", "objetos": [segundo], "fondo": "", "duracion_frames": 600},
+        ]
+        response = self.client.post(self.guardar, {
+            "nombre": "Presentación",
+            "objetos": json.dumps([primero]),
+            "fondo": "",
+            "duracion_frames": 300,
+            "diapositivas": json.dumps(slides),
+            "diapositiva_activa": 0,
+        })
+        self.assertRedirects(response, self.detalle)
+        self.proyecto.refresh_from_db()
+        self.assertEqual(self.proyecto.diapositivas, slides)
+        self.assertEqual(self.proyecto.objetos, [primero])
+
+    def test_color_de_diapositiva_es_opcional_compatible_y_validado(self):
+        slide = {"id": "slide-1", "objetos": [], "fondo": "", "duracion_frames": 300}
+        validar_diapositivas([slide])
+        validar_diapositivas([{**slide, "color_fondo": "#dbeafe"}])
+        for color in ("blue", "#fff", 123):
+            with self.subTest(color=color), self.assertRaises(ValidationError):
+                validar_diapositivas([{**slide, "color_fondo": color}])
+
+    def test_exporta_todas_las_diapositivas_en_pdf_pptx_y_png(self):
+        fondo = f"fondos/{imagenes_disponibles('fondos')[0]}"
+        objeto = self.cuadro(texto="Editable en PowerPoint")
+        objeto["fotogramas"][0]["giro"] = 90
+        self.proyecto.diapositivas = [
+            {"id": "slide-1", "objetos": [objeto], "fondo": fondo, "color_fondo": "#dbeafe", "duracion_frames": 300},
+            {"id": "slide-2", "objetos": [], "fondo": "", "color_fondo": "#fef9c3", "duracion_frames": 600},
+        ]
+        self.proyecto.save()
+
+        pdf = self.client.get(reverse("editor:exportar", args=[self.proyecto.pk, "pdf"]))
+        self.assertEqual(pdf["Content-Type"], "application/pdf")
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
+        pptx = self.client.get(reverse("editor:exportar", args=[self.proyecto.pk, "pptx"]))
+        deck = Presentation(BytesIO(pptx.content))
+        self.assertEqual(len(deck.slides), 2)
+        self.assertIn("Editable en PowerPoint", deck.slides[0].shapes[1].text)
+        self.assertEqual(deck.slides[0].shapes[1].rotation, 90)
+        self.assertEqual(tuple(deck.slides[0].background.fill.fore_color.rgb), (219, 234, 254))
+        self.assertEqual(tuple(deck.slides[1].background.fill.fore_color.rgb), (254, 249, 195))
+        images = self.client.get(reverse("editor:exportar", args=[self.proyecto.pk, "png"]))
+        with ZipFile(BytesIO(images.content)) as archive:
+            self.assertEqual(archive.namelist(), ["diapositiva-1.png", "diapositiva-2.png"])
+            rotated_png = archive.read("diapositiva-1.png")
+            with Image.open(BytesIO(archive.read("diapositiva-2.png"))) as slide_image:
+                self.assertEqual(slide_image.getpixel((0, 0)), (254, 249, 195))
+        object_without_rotation = deepcopy(objeto)
+        object_without_rotation["fotogramas"][0]["giro"] = 0
+        unrotated_slides = [dict(self.proyecto.diapositivas[0], objetos=[object_without_rotation])]
+        with ZipFile(BytesIO(exportar_imagenes(unrotated_slides))) as archive:
+            unrotated_png = archive.read("diapositiva-1.png")
+        self.assertNotEqual(rotated_png, unrotated_png)
+
+    def test_exportacion_requiere_propietario_y_formato_valido(self):
+        self.client.force_login(self.otro)
+        self.assertEqual(self.client.get(reverse("editor:exportar", args=[self.proyecto.pk, "pdf"])).status_code, 404)
+        self.client.force_login(self.usuario)
+        self.assertEqual(self.client.get(reverse("editor:exportar", args=[self.proyecto.pk, "exe"])).status_code, 404)
 
     def test_autoguardado_ajax_guarda_y_reporta_errores(self):
         objeto = self.cuadro(animacion="subir")
@@ -305,7 +448,8 @@ class ProyectoTests(TestCase):
             self.assertEqual(self.proyecto.objetos, objetos)
 
     def test_rechaza_escenas_invalidas_sin_modificar_proyecto(self):
-        invalidos = [None, {}, "texto", [self.cuadro(x=-1)], [self.cuadro(x=600)],
+        invalidos = [None, {}, "texto", [self.cuadro(x=-8001)], [self.cuadro(x=8001)],
+            [self.cuadro(ancho=8001)], [self.cuadro(alto=4501)],
             [self.cuadro(tamano=121)], [self.cuadro(tamano=True)], [self.cuadro(x=float("nan"))],
             [self.cuadro(fuente="<script>")], [self.cuadro(color="red")],
             [self.cuadro(texto="a" * 5001)], [self.cuadro(alto=0)],
@@ -320,6 +464,17 @@ class ProyectoTests(TestCase):
                 self.proyecto.refresh_from_db()
                 self.assertEqual(self.proyecto.nombre, "Proyecto de Ana")
                 self.assertEqual(self.proyecto.objetos, [])
+
+    def test_objetos_y_fotogramas_pueden_salir_del_marco(self):
+        objeto = self.cuadro(x=-120, y=470, ancho=1000, alto=600)
+        objeto["fotogramas"][0].update(x=-120, y=470)
+        response = self.client.post(self.guardar, {
+            "nombre": "Objeto fuera del marco",
+            "objetos": json.dumps([objeto]),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.proyecto.refresh_from_db()
+        self.assertEqual(self.proyecto.objetos, [objeto])
 
     def test_json_roto_y_error_nombre_conservan_cuadros(self):
         response = self.client.post(self.guardar, {"nombre": "Escena", "objetos": "{roto"})
@@ -357,7 +512,7 @@ class ProyectoTests(TestCase):
         base = self.cuadro()
         key = base["fotogramas"][0]
         invalidos = [[], [key, key], [{**key, "frame": -1}], [{**key, "frame": 1.5}],
-            [{**key, "frame": True}], [{**key, "frame": 3601}], [{**key, "x": 600}],
+            [{**key, "frame": True}], [{**key, "frame": 3601}], [{**key, "x": 8001}],
             [{**key, "giro": 361}], [{**key, "opacidad": -0.1}], [{**key, "opacidad": float("nan")}],
             [{**key, "opacidad": True}], [{**key, "interpolacion": "desconocida"}],
             [{**key, "frame": 10}, key], [{**key, "extra": 3}]]

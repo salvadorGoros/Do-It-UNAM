@@ -11,6 +11,10 @@ ALLOWED_HOSTS = [
     for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",")
     if host.strip()
 ]
+PUBLIC_TUNNEL_ENABLED = os.environ.get("DJANGO_PUBLIC_TUNNEL") == "1"
+if PUBLIC_TUNNEL_ENABLED:
+    ALLOWED_HOSTS.append(".trycloudflare.com")
+CSRF_TRUSTED_ORIGINS = ["https://*.trycloudflare.com"] if PUBLIC_TUNNEL_ENABLED else []
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -70,6 +74,7 @@ USE_I18N = True
 USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "editor:index"

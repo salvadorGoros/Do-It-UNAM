@@ -21,6 +21,25 @@ proyectos propios.
 Para detener el servidor, vuelve a la misma ventana de PowerShell donde está
 ejecutándose y presiona **Ctrl+C**.
 
+## Compartir temporalmente por internet
+
+Para que alguien desde otra red pueda abrir el sitio, instala
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+(por ejemplo, en Windows con `winget install --id Cloudflare.cloudflared`) y
+ejecuta desde PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe run_public.py
+```
+
+El programa inicia Django en `127.0.0.1:8000`, crea un Cloudflare Quick Tunnel
+y muestra el enlace HTTPS temporal para compartir. No requiere una cuenta de
+Cloudflare; sí conexión a internet. La URL cambia al iniciar un túnel nuevo y
+solo funciona mientras la ventana siga abierta. Presiona **Ctrl+C** para detener
+el servidor y cerrar el acceso. Como el sitio será público, comparte el enlace
+solo con quienes deban usarlo; las cuentas y los proyectos siguen protegidos
+por el inicio de sesión existente.
+
 ## Crear el administrador
 
 Una vez aplicadas las migraciones, ejecutar en una terminal interactiva:
@@ -55,17 +74,30 @@ Los nombres admiten hasta 150 caracteres, pueden repetirse y no pueden estar
 vacíos. Se eliminan los espacios exteriores. Los proyectos se ordenan por última
 modificación y solo su propietario puede abrirlos o cambiarles el nombre en el editor.
 
-Cada escena admite hasta 100 objetos. Los cuadros de texto aceptan hasta 5000
+Cada diapositiva admite hasta 100 objetos. Agrega hojas en la barra inferior,
+selecciónalas para editarlas de forma independiente, duplica, cambia su orden,
+elimina, copia y pega hojas. También puedes copiar y pegar objetos con Ctrl+C y
+Ctrl+V. Cada hoja tiene una duración de 1 a 120 segundos; **Presentar** cambia de
+hoja automáticamente al terminar ese tiempo y también permite avanzar con las
+flechas del teclado. Presiona Escape para salir.
+Los cuadros de texto aceptan hasta 5000
 caracteres, incluidos saltos de línea; los elementos gráficos se pueden mover,
 redimensionar y animar igual que los cuadros.
 Enter edita el cuadro seleccionado, Escape termina la edición, las flechas lo
 mueven (Shift mueve 10 píxeles) y Supr lo elimina cuando no estás escribiendo.
+Ctrl+Z o la flecha curva izquierda deshacen la última edición; Ctrl+Y, Ctrl+Shift+Z
+o la flecha curva derecha la rehacen. El historial incluye texto, formato,
+movimientos, tamaño, elementos y cambios de diapositiva.
 Los cuadros mantienen su posición sobre un lienzo de 800 × 450 que se escala para
 ajustarse al espacio disponible. El texto que excede el cuadro queda recortado:
 amplía el cuadro o reduce la fuente para verlo completo. Cada objeto tiene un ID
-estable, texto plano, posición, dimensiones y formato. Abre **Animar**, selecciona
-un objeto y aplica con un clic uno de los efectos predefinidos; **Vista previa**
-reproduce los efectos elegidos. La animación es opcional y se configura por objeto.
+estable, texto plano, posición, dimensiones y formato. Abre **Animar** y elige un
+efecto predefinido. Puedes aplicarlo al objeto seleccionado, a todos los objetos
+de la diapositiva o a toda la presentación. **Vista previa** muestra los efectos;
+en **Presentar** se reproducen al entrar a cada diapositiva.
+La exportación PDF y PNG es estática. PowerPoint conserva texto e imágenes como
+objetos editables; las animaciones se reproducen en el modo Presentar del editor.
+Las imágenes se descargan juntas como un ZIP de PNG.
 Se necesita JavaScript para editar. Se avisa al salir mientras hay cambios sin guardar.
 
 ## Archivos principales
@@ -75,7 +107,9 @@ Se necesita JavaScript para editar. Se avisa al salir mientras hay cambios sin g
 - `editor/urls.py` y `editor/views.py`: ruta y vista del editor.
 - `editor/templates/editor/index.html`: plantilla activa; editar aquí la interfaz.
 - `editor/models.py`, `editor/forms.py` y `editor/scene.py`: proyecto y validación de la escena.
-- `editor/static/editor/js/editor.js`: selección, edición, arrastre y formato.
+- `editor/static/editor/js/editor.js`: diapositivas, reproducción y edición del lienzo.
+- `editor/exports.py`: exportación a PDF, PowerPoint editable y PNG.
+- `editor/migrations/`: migraciones del proyecto, incluidas las diapositivas.
 - `editor/static/editor/images/logo.png`: logo PNG usado en los encabezados y el acceso a **Mis proyectos**.
 - `editor/static/editor/images/favicon.png`: versión recortada del emblema para la pestaña del navegador.
 - `editor/static/editor/images/elementos/`: imágenes PNG, JPG, JPEG o WebP disponibles en la sección **Elementos**.
@@ -87,14 +121,14 @@ Se necesita JavaScript para editar. Se avisa al salir mientras hay cambios sin g
 
 ## Estado actual
 
-Se guardan el nombre, propietario, fechas, cuadros de texto, elementos gráficos y fondo de cada proyecto.
+Se guardan el nombre, propietario, fechas y las diapositivas independientes con
+sus objetos, fondos y duración.
 Los proyectos nuevos empiezan sin texto. Ya no existe el panel de título/subtítulo.
 En **Elementos**, elegir una imagen la agrega al lienzo; se puede seleccionar,
 mover, redimensionar y animar como los cuadros de texto. En **Fondos**, elegir
 una imagen la aplica al lienzo completo; **Quitar fondo** vuelve al lienzo blanco.
 Los cambios se guardan automáticamente. Para agregar más recursos, copia
 archivos PNG, JPG, JPEG o WebP en la carpeta de la sección y recarga el editor.
-La reproducción, varias escenas, compartir y exportación siguen pendientes.
 Para el logo, copia el archivo PNG a `editor/static/editor/images/logo.png`.
 Ese archivo se muestra en el encabezado como botón para regresar a **Mis proyectos**
 y también como icono PNG de la pestaña del navegador.
@@ -126,9 +160,9 @@ Prueba opcional de interacción real en Chromium:
 .\.venv\Scripts\python.exe manage.py test editor.browser_tests
 ```
 
-Comprueba agregar elementos e imágenes de fondo, editar, mover, redimensionar,
-dar formato, guardar, recargar y eliminar usando una base temporal y Chromium sin
-ventana visible.
+Comprueba diapositivas, animaciones, agregar elementos e imágenes de fondo,
+editar, mover, redimensionar, dar formato, guardar, recargar y exportar usando
+una base temporal y Chromium sin ventana visible.
 
 Configuración destinada a desarrollo local. Para un despliegue se deben configurar
 `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0` y `DJANGO_ALLOWED_HOSTS` (separados por comas),

@@ -5,14 +5,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}DO IT UNAM{% endblock %}</title>
-    <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=1">
+    <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{% static 'editor/css/cuentas.css' %}?v=4">
+    <link rel="stylesheet" href="{% static 'editor/css/cuentas.css' %}?v=5">
 </head>
 <body>
     <header class="site-header">
         <a class="brand" href="{% url 'editor:index' %}" aria-label="Ir a Mis proyectos" title="Mis proyectos">
-            <img class="brand-logo" src="{% static 'editor/images/logo.png' %}?v=3" alt="DO IT UNAM" width="44" height="44">
+            <img class="brand-logo" src="{% static 'editor/images/logo.png' %}?v=4" alt="DO IT UNAM" width="52" height="52">
         </a>
         {% if user.is_authenticated %}
         <div class="account">
