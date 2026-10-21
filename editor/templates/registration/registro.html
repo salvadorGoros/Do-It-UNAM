@@ -1,20 +1,57 @@
 {% extends 'editor/base.html' %}
 {% block title %}Crear cuenta · DO IT UNAM{% endblock %}
+{% block body_class %}auth-page register-page{% endblock %}
 {% block content %}
-<section class="panel login-panel">
-    <h1>Crear cuenta</h1>
-    <p class="muted">Regístrate para guardar y administrar tus proyectos.</p>
-    <form method="post" action="{% url 'editor:registro' %}">
-        {% csrf_token %}
-        {{ form.non_field_errors }}
-        {% for field in form %}
-        <div class="field">
-            {{ field.label_tag }}{{ field }}{{ field.errors }}
-            {% if field.help_text %}<div class="muted small">{{ field.help_text }}</div>{% endif %}
+<div class="auth-shell">
+    <section class="auth-story" aria-labelledby="register-welcome-title">
+        <div class="auth-story-content">
+            <p class="auth-eyebrow">Crea, anima y comparte</p>
+            <h1 id="register-welcome-title">Tu próxima presentación comienza aquí.</h1>
+            <p class="auth-story-copy">Únete con tu correo institucional y construye contenido visual desde cualquier dispositivo.</p>
+            <div class="register-steps" aria-label="Proceso de registro">
+                <div><strong>01</strong><span>Regístrate con tu correo de Comunidad UNAM.</span></div>
+                <div><strong>02</strong><span>Crea tu primer proyecto desde un lienzo en blanco.</span></div>
+                <div><strong>03</strong><span>Agrega multimedia, animaciones y contenido con IA.</span></div>
+            </div>
         </div>
-        {% endfor %}
-        <button type="submit">Crear cuenta</button>
-    </form>
-    <p class="muted small account-links">¿Ya tienes cuenta? <a href="{% url 'login' %}">Inicia sesión</a>.</p>
-</section>
+        <div class="auth-register-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3 4.5 6v5c0 4.7 3.2 8.1 7.5 10 4.3-1.9 7.5-5.3 7.5-10V6L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.5 12 2.2 2.2 4.8-4.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><strong>Acceso institucional</strong>Comunidad UNAM</span>
+        </div>
+    </section>
+
+    <section class="auth-card register-card" aria-labelledby="register-title">
+        <div class="auth-card-heading">
+            <p class="auth-eyebrow">Comienza ahora</p>
+            <h2 id="register-title">Crear cuenta</h2>
+            <p>Completa tus datos institucionales para ingresar.</p>
+        </div>
+        <form method="post" action="{% url 'editor:registro' %}" class="auth-form register-form">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            {% for field in form.hidden_fields %}{{ field }}{% endfor %}
+            {% for field in form.visible_fields %}
+            <div class="field auth-field{% if field.errors %} has-error{% endif %}">
+                {{ field.label_tag }}{{ field }}{{ field.errors }}
+                {% if field.help_text %}
+                    {% if field.name == 'password1' %}
+                    <details class="password-rules">
+                        <summary>Ver requisitos de contraseña</summary>
+                        <div>{{ field.help_text|safe }}</div>
+                    </details>
+                    {% else %}
+                    <div class="auth-help">{{ field.help_text|safe }}</div>
+                    {% endif %}
+                {% endif %}
+            </div>
+            {% endfor %}
+            <button class="auth-submit" type="submit">
+                <span>Crear cuenta</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </form>
+        <p class="auth-role-note"><span aria-hidden="true">i</span> Las cuentas nuevas reciben el rol Alumno. Después, un administrador puede asignar el rol Docente.</p>
+        <p class="auth-switch">¿Ya tienes cuenta? <a href="{% url 'login' %}">Inicia sesión</a></p>
+    </section>
+</div>
 {% endblock %}

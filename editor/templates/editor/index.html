@@ -3,7 +3,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{{ proyecto.nombre }}</title>
     <!-- Tailwind CSS para los estilos -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -12,7 +12,7 @@
     <!-- Fuente Poppins -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=2">
-    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=28">
+    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=36">
 </head>
 <body class="h-screen flex flex-col bg-[#f3f4f6] overflow-hidden text-gray-700">
 
@@ -36,7 +36,7 @@
             {{ form.duracion_frames }}
             {{ form.diapositivas }}
             {{ form.diapositiva_activa }}
-            <button type="submit" class="project-save"><i class="fa-regular fa-floppy-disk" aria-hidden="true"></i> Guardar</button>
+            <button type="submit" class="project-save" aria-label="Guardar proyecto"><i class="fa-regular fa-floppy-disk" aria-hidden="true"></i><span>Guardar</span></button>
             <div class="project-field">
                 {{ form.nombre.label_tag }}
                 {{ form.nombre }}
@@ -44,7 +44,7 @@
             </div>
         </form>
         <div class="topbar-actions">
-            <button id="present-button" type="button" class="present-button">Presentar</button>
+            <button id="present-button" type="button" class="present-button" aria-label="Presentar"><i class="fa-solid fa-play" aria-hidden="true"></i><span>Presentar</span></button>
             <details class="account-menu">
                 <summary aria-label="Menú de cuenta" title="Menú de cuenta">
                     <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
@@ -54,8 +54,13 @@
                 </form>
             </details>
             <details class="share-menu">
-                <summary><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i> Compartir</summary>
+                <summary aria-label="Compartir y exportar"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i><span>Compartir</span></summary>
                 <div class="share-menu-items">
+                    <label class="export-resolution">Resolución
+                        <select id="export-resolution"><option value="1080">1080p</option><option value="720">720p</option></select>
+                    </label>
+                    <a class="animated-export" data-format="mp4" href="{% url 'editor:exportar' proyecto.pk 'mp4' %}"><i class="fa-solid fa-video" aria-hidden="true"></i> Video MP4</a>
+                    <a class="animated-export" data-format="gif" href="{% url 'editor:exportar' proyecto.pk 'gif' %}"><i class="fa-regular fa-file-image" aria-hidden="true"></i> GIF animado</a>
                     <a href="{% url 'editor:exportar' proyecto.pk 'pdf' %}"><i class="fa-regular fa-file-pdf" aria-hidden="true"></i> Descargar PDF</a>
                     <a href="{% url 'editor:exportar' proyecto.pk 'pptx' %}"><i class="fa-regular fa-file-powerpoint" aria-hidden="true"></i> PowerPoint editable</a>
                     <a href="{% url 'editor:exportar' proyecto.pk 'png' %}"><i class="fa-regular fa-images" aria-hidden="true"></i> Imágenes PNG (ZIP)</a>
@@ -73,7 +78,7 @@
 
     <div id="editor-shell" class="flex flex-1 overflow-hidden">
         <!-- BARRA LATERAL IZQUIERDA -->
-        <aside class="w-20 bg-white border-r border-gray-200 flex flex-col items-center py-4 gap-6 shrink-0 z-10 shadow-sm">
+        <aside class="w-20 bg-white border-r border-gray-200 flex flex-col items-center py-4 gap-6 shrink-0 z-10 shadow-sm" aria-label="Herramientas del editor">
             <button id="text-tool" type="button" class="flex flex-col items-center gap-1 text-[#0b3b60] bg-blue-50 w-full py-2 border-l-4 border-[#0b3b60]">
                 <i class="fa-solid fa-font text-xl"></i>
                 <span class="text-[10px] font-medium">Texto</span>
@@ -82,7 +87,7 @@
                 <i class="fa-regular fa-image text-xl"></i>
                 <span class="text-[10px]">Subir</span>
             </button>
-            <button class="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-800 w-full py-2">
+            <button id="ai-tool" type="button" class="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-800 w-full py-2" aria-expanded="false" aria-controls="asset-panel">
                 <i class="fa-solid fa-wand-magic-sparkles text-xl"></i>
                 <span class="text-[10px]">IA</span>
             </button>
@@ -90,7 +95,7 @@
                 <i class="fa-solid fa-shapes text-xl"></i>
                 <span class="text-[10px]">Elementos</span>
             </button>
-            <button class="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-800 w-full py-2">
+            <button id="audio-tool" type="button" class="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-800 w-full py-2" aria-expanded="false" aria-controls="asset-panel">
                 <i class="fa-solid fa-music text-xl"></i>
                 <span class="text-[10px]">Audio</span>
             </button>
@@ -157,6 +162,142 @@
                 <div id="uploaded-image-grid" class="asset-grid" aria-live="polite"></div>
                 <p id="uploaded-image-empty" class="asset-empty">Todavía no has subido imágenes.</p>
             </div>
+            <div class="asset-gallery ai-gallery" data-gallery="ia"
+                data-status-url="{% url 'editor:estado_ia' proyecto.pk %}"
+                data-generate-url="{% url 'editor:generar_ia' proyecto.pk %}"
+                data-document-upload-url="{% url 'editor:subir_documento_ia' proyecto.pk %}" hidden>
+                <div id="ai-connection" class="ai-connection" role="status" aria-live="polite">
+                    <span class="ai-status-dot" aria-hidden="true"></span>
+                    <span id="ai-connection-text">Comprobando Gemini…</span>
+                </div>
+                <p id="ai-quota" class="ai-quota"></p>
+                <p class="ai-privacy"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> La clave permanece en el servidor. No se incluye en el proyecto ni en el navegador.</p>
+
+                <details class="ai-card" open>
+                    <summary>Convertir PDF o PowerPoint</summary>
+                    <div class="ai-card-body">
+                        <p class="ai-document-help">Gemini reorganiza el contenido en diapositivas editables. PDF o PPTX, máximo 50 MB.</p>
+                        <label for="ai-document-file">Documento
+                            <input id="ai-document-file" type="file" accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation">
+                        </label>
+                        <div class="ai-inline-fields">
+                            <label>Diapositivas <input id="ai-document-slide-count" type="number" min="1" max="20" value="5"></label>
+                            <label>Estilo
+                                <select id="ai-document-style">
+                                    <option value="academico">Académico</option>
+                                    <option value="visual">Visual</option>
+                                    <option value="minimalista">Minimalista</option>
+                                    <option value="narrativo">Narrativo</option>
+                                </select>
+                            </label>
+                        </div>
+                        <label for="ai-document-audience">Audiencia</label>
+                        <input id="ai-document-audience" type="text" maxlength="120" value="Estudiantes universitarios">
+                        <button id="ai-convert-document" class="ai-primary" type="button">Convertir documento</button>
+                        <div id="ai-document-job" class="ai-document-job" hidden>
+                            <div class="ai-document-status-line">
+                                <strong id="ai-document-filename"></strong>
+                                <span id="ai-document-percent">0%</span>
+                            </div>
+                            <progress id="ai-document-progress" max="100" value="0"></progress>
+                            <p id="ai-document-status"></p>
+                            <div class="ai-document-actions">
+                                <button id="ai-cancel-document" type="button">Cancelar</button>
+                                <button id="ai-retry-document" type="button" hidden>Reintentar</button>
+                            </div>
+                        </div>
+                        <div id="ai-document-result" class="ai-result" hidden>
+                            <strong id="ai-document-title"></strong>
+                            <ol id="ai-document-preview"></ol>
+                            <button id="ai-apply-document" type="button">Agregar después de la diapositiva actual</button>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="ai-card">
+                    <summary>Crear presentación</summary>
+                    <div class="ai-card-body">
+                        <label for="ai-presentation-topic">Tema e indicaciones</label>
+                        <textarea id="ai-presentation-topic" maxlength="5000" rows="4" placeholder="Ej. Explica la fotosíntesis con ejemplos para bachillerato"></textarea>
+                        <div class="ai-inline-fields">
+                            <label>Diapositivas <input id="ai-slide-count" type="number" min="1" max="20" value="5"></label>
+                            <label>Estilo
+                                <select id="ai-presentation-style">
+                                    <option value="academico">Académico</option>
+                                    <option value="visual">Visual</option>
+                                    <option value="minimalista">Minimalista</option>
+                                    <option value="narrativo">Narrativo</option>
+                                </select>
+                            </label>
+                        </div>
+                        <label for="ai-audience">Audiencia</label>
+                        <input id="ai-audience" type="text" maxlength="120" value="Estudiantes universitarios">
+                        <button id="ai-generate-presentation" class="ai-primary" type="button">Generar estructura</button>
+                        <div id="ai-presentation-result" class="ai-result" hidden>
+                            <strong id="ai-presentation-title"></strong>
+                            <ol id="ai-presentation-preview"></ol>
+                            <button id="ai-apply-presentation" type="button">Agregar después de la diapositiva actual</button>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="ai-card">
+                    <summary>Asistente de texto</summary>
+                    <div class="ai-card-body">
+                        <label for="ai-text-action">Tarea</label>
+                        <select id="ai-text-action">
+                            <option value="resumir">Resumir</option>
+                            <option value="mejorar">Mejorar redacción</option>
+                            <option value="vinetas">Convertir en viñetas</option>
+                            <option value="guion">Crear guion del expositor</option>
+                        </select>
+                        <label for="ai-text-source">Contenido</label>
+                        <textarea id="ai-text-source" maxlength="15000" rows="5" placeholder="Selecciona un texto del lienzo o escríbelo aquí"></textarea>
+                        <label for="ai-text-instruction">Indicaciones opcionales</label>
+                        <textarea id="ai-text-instruction" maxlength="2000" rows="2" placeholder="Ej. Usa lenguaje sencillo y conserva las fechas"></textarea>
+                        <button id="ai-generate-text" class="ai-primary" type="button">Procesar texto</button>
+                        <div id="ai-text-result" class="ai-result" hidden>
+                            <textarea id="ai-text-output" rows="7" readonly></textarea>
+                            <button id="ai-apply-text" type="button">Aplicar al objeto seleccionado</button>
+                        </div>
+                        <div class="ai-slide-notes">
+                            <label for="ai-slide-notes">Notas o guion de esta diapositiva</label>
+                            <textarea id="ai-slide-notes" maxlength="20000" rows="5" placeholder="Escribe aquí o genera un guion con Gemini"></textarea>
+                            <small>Se guardan con la diapositiva y siguen siendo editables.</small>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="ai-card">
+                    <summary>Generar imagen o diagrama</summary>
+                    <div class="ai-card-body">
+                        <label for="ai-image-prompt">Descripción</label>
+                        <textarea id="ai-image-prompt" maxlength="2000" rows="4" placeholder="Describe el contenido visual, etiquetas y estilo"></textarea>
+                        <div class="ai-inline-fields">
+                            <label>Tipo
+                                <select id="ai-image-type">
+                                    <option value="ilustracion">Ilustración</option>
+                                    <option value="diagrama">Diagrama</option>
+                                    <option value="infografia">Infografía</option>
+                                </select>
+                            </label>
+                            <label>Proporción
+                                <select id="ai-aspect-ratio">
+                                    <option value="16:9">16:9</option>
+                                    <option value="4:3">4:3</option>
+                                    <option value="1:1">1:1</option>
+                                </select>
+                            </label>
+                        </div>
+                        <button id="ai-generate-image" class="ai-primary" type="button">Generar imagen</button>
+                        <div id="ai-image-result" class="ai-result" hidden>
+                            <img id="ai-image-preview" alt="Vista previa de la imagen generada con Gemini">
+                            <button id="ai-apply-image" type="button">Agregar a la diapositiva</button>
+                        </div>
+                    </div>
+                </details>
+                <p id="ai-message" class="ai-message" role="status" aria-live="polite"></p>
+            </div>
             <div class="asset-gallery" data-gallery="fondos" hidden>
                 <p>Selecciona un fondo para aplicarlo a la escena.</p>
                 <button id="clear-background" class="clear-background" type="button">Quitar fondo</button>
@@ -176,21 +317,45 @@
                 <p class="asset-empty">No hay fondos. Agrega imágenes a `editor/static/editor/images/fondos/`.</p>
                 {% endfor %}
             </div>
+            <div class="asset-gallery audio-gallery" data-gallery="audios" data-upload-url="{% url 'editor:subir_audio' proyecto.pk %}" data-audios-url="{% url 'editor:audios_subidos' %}" hidden>
+                <p>Sube música o narraciones y asígnalas a la diapositiva seleccionada.</p>
+                <p class="asset-help">MP3, WAV, OGG o M4A; máximo 25 MB por archivo y 5 por tanda.</p>
+                <input id="audio-file-input" type="file" accept=".mp3,.wav,.ogg,.m4a,audio/mpeg,audio/wav,audio/ogg,audio/mp4" multiple hidden>
+                <button id="upload-audio-trigger" class="upload-image-button" type="button">
+                    <i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i> Subir audios
+                </button>
+                <p id="audio-upload-status" class="image-upload-status" role="status" aria-live="polite"></p>
+                <section class="selected-audio" aria-labelledby="selected-audio-title">
+                    <h3 id="selected-audio-title" class="asset-section-title">Pista seleccionada</h3>
+                    <p id="selected-audio-name">Sin pista seleccionada</p>
+                    <audio id="selected-audio-preview" controls preload="metadata" hidden></audio>
+                    <button id="clear-audio" class="clear-background" type="button" disabled>Quitar pista de la diapositiva</button>
+                </section>
+                <h3 class="asset-section-title">Mis audios</h3>
+                <div id="uploaded-audio-list" class="audio-list" aria-live="polite"></div>
+                <p id="uploaded-audio-empty" class="asset-empty">Todavía no has subido audios.</p>
+            </div>
             <div class="asset-gallery" data-gallery="animaciones" hidden>
                 <fieldset class="slide-duration-control">
                     <legend>Diapositiva seleccionada</legend>
                     <label for="slide-duration">Duración en Presentar</label>
-                    <div><input id="slide-duration" type="number" min="1" max="120" value="10"><span>segundos</span></div>
+                    <div><input id="slide-duration" type="number" min="1" max="3600" value="10"><span>segundos</span></div>
                     <small>Tiempo antes de avanzar automáticamente a la siguiente diapositiva.</small>
                 </fieldset>
                 <p id="animation-selection">Selecciona un texto o elemento para aplicarle una animación.</p>
                 <div class="animation-presets">
-                    <button class="animation-choice" type="button" data-animation="ninguna"><span>Sin animación</span><small>Mostrar estático</small></button>
-                    <button class="animation-choice" type="button" data-animation="aparecer"><span>Desvanecer</span><small>Aparece suavemente</small></button>
-                    <button class="animation-choice" type="button" data-animation="subir"><span>Subir</span><small>Entra desde abajo</small></button>
-                    <button class="animation-choice" type="button" data-animation="zoom"><span>Zoom</span><small>Aparece con escala</small></button>
-                    <button class="animation-choice" type="button" data-animation="girar"><span>Girar</span><small>Entra girando</small></button>
-                    <button class="animation-choice" type="button" data-animation="rebote"><span>Rebote</span><small>Entra con rebote</small></button>
+                    <h3>Entrada</h3>
+                    <button class="animation-choice" type="button" data-keyframe-preset="ninguna" data-animation="ninguna"><span>Sin animación</span><small>Conserva solo el estado inicial</small></button>
+                    <button class="animation-choice" type="button" data-keyframe-preset="aparecer" data-animation="aparecer"><span>Desvanecer</span><small>Aparece suavemente</small></button>
+                    <button class="animation-choice" type="button" data-keyframe-preset="subir" data-animation="subir"><span>Subir</span><small>Entra desde abajo</small></button>
+                    <button class="animation-choice" type="button" data-keyframe-preset="zoom" data-animation="zoom"><span>Zoom</span><small>Crece hasta su tamaño</small></button>
+                    <h3>Énfasis</h3>
+                    <button class="animation-choice" type="button" data-keyframe-preset="girar" data-animation="girar"><span>Girar</span><small>Giro completo</small></button>
+                    <button class="animation-choice" type="button" data-keyframe-preset="rebote" data-animation="rebote"><span>Rebote</span><small>Movimiento elástico</small></button>
+                    <button class="animation-choice" type="button" data-keyframe-preset="pulso" data-animation="pulso"><span>Pulso</span><small>Aumenta y recupera tamaño</small></button>
+                    <h3>Salida</h3>
+                    <button class="animation-choice" type="button" data-keyframe-preset="desaparecer" data-animation="desaparecer"><span>Desvanecer</span><small>Desaparece suavemente</small></button>
+                    <button class="animation-choice" type="button" data-keyframe-preset="salir-arriba" data-animation="salir-arriba"><span>Salir arriba</span><small>Sale por la parte superior</small></button>
                 </div>
                 <label class="animation-scope-label" for="animation-scope">Aplicar a</label>
                 <select id="animation-scope">
@@ -210,7 +375,7 @@
             <div id="text-toolbar" class="text-toolbar" aria-label="Herramientas de texto" hidden>
                 <fieldset id="object-tools" disabled>
                     <legend class="sr-only">Formato del cuadro seleccionado</legend>
-                    <label>Fuente <select id="font-family"><option>Poppins</option><option>Arial</option></select></label>
+                    <label>Fuente <select id="font-family"><option>Poppins</option><option>Arial</option><option>Georgia</option><option>Verdana</option><option>Courier New</option></select></label>
                     <label>Tamaño <input id="font-size" type="number" min="8" max="120" value="36"></label>
                     <label class="custom-color-label">Color
                         <span class="custom-color-wheel" title="Elegir un color personalizado">
@@ -267,7 +432,7 @@
             </div>
             <div class="stage-area">
                 <div id="stage-viewport">
-                    <div id="stage" class="canvas-bg" data-asset-base="{% static 'editor/images/' %}" data-uploaded-image-base="{% url 'editor:imagenes_subidas' %}" aria-label="Lienzo de animación" tabindex="0"></div>
+                    <div id="stage" class="canvas-bg" data-asset-base="{% static 'editor/images/' %}" data-uploaded-image-base="{% url 'editor:imagenes_subidas' %}" data-uploaded-audio-base="{% url 'editor:audios_subidos' %}" aria-label="Lienzo de animación" tabindex="0"></div>
                 </div>
                 <div id="presentation-controls" class="presentation-controls" hidden>
                     <button id="exit-presentation" type="button">Salir</button>
@@ -276,7 +441,114 @@
                     <button id="next-slide" type="button" aria-label="Diapositiva siguiente">→</button>
                 </div>
             </div>
+            <section id="timeline-panel" class="timeline-panel" hidden
+                data-templates-url="{% url 'editor:plantillas_animacion' %}"
+                data-save-template-url="{% url 'editor:guardar_plantilla_animacion' %}"
+                data-delete-template-pattern="{% url 'editor:eliminar_plantilla_animacion' 999999 %}">
+                <header class="timeline-header">
+                    <div class="timeline-heading">
+                        <span class="timeline-heading-icon" aria-hidden="true"><i class="fa-solid fa-wave-square"></i></span>
+                        <span><strong>Línea de tiempo</strong><small>Animación de la diapositiva</small></span>
+                    </div>
+                    <div class="timeline-transport" aria-label="Controles de reproducción">
+                        <button id="timeline-start" type="button" title="Ir al inicio" aria-label="Ir al inicio"><i class="fa-solid fa-backward-step" aria-hidden="true"></i></button>
+                        <button id="timeline-play" class="timeline-play-button" type="button" title="Reproducir" aria-label="Reproducir"><i class="fa-solid fa-play" aria-hidden="true"></i></button>
+                        <button id="timeline-stop" type="button" title="Detener" aria-label="Detener"><i class="fa-solid fa-stop" aria-hidden="true"></i></button>
+                        <output id="timeline-time">00:00.00 · F0</output>
+                    </div>
+                    <div class="timeline-options">
+                        <button id="timeline-add-keyframe" class="timeline-action" type="button"><i class="fa-solid fa-diamond" aria-hidden="true"></i><span>Fotograma</span></button>
+                        <button id="timeline-add-marker" class="timeline-action" type="button"><i class="fa-solid fa-hand-pointer" aria-hidden="true"></i><span>Pausa por clic</span></button>
+                        <button id="timeline-loop" class="timeline-action" type="button" aria-pressed="false"><i class="fa-solid fa-repeat" aria-hidden="true"></i><span>Bucle</span></button>
+                        <label class="timeline-zoom-control" title="Zoom de la línea de tiempo"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span class="sr-only">Zoom</span><input id="timeline-zoom" type="range" min="40" max="240" value="100"></label>
+                        <button id="close-timeline" class="timeline-close" type="button" aria-label="Cerrar línea de tiempo" title="Cerrar"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button>
+                    </div>
+                </header>
+                <div class="timeline-body">
+                    <div class="timeline-main">
+                        <div id="timeline-ruler" class="timeline-ruler" aria-label="Regla de tiempo"></div>
+                        <div id="timeline-tracks" class="timeline-tracks"></div>
+                        <div id="timeline-playhead" class="timeline-playhead" aria-hidden="true"></div>
+                    </div>
+                    <details id="keyframe-inspector-panel" class="keyframe-inspector" aria-label="Propiedades del fotograma clave">
+                        <summary>
+                            <span><strong>Inspector</strong><small>Propiedades del fotograma</small></span>
+                            <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+                        </summary>
+                        <div class="keyframe-inspector-content">
+                            <p id="keyframe-empty">Selecciona o agrega un fotograma.</p>
+                            <fieldset id="keyframe-fields" disabled>
+                            <label>Fotograma <input id="keyframe-frame" type="number" min="0" step="1"></label>
+                            <label>Posición X <input id="keyframe-x" type="number" step="1"></label>
+                            <label>Posición Y <input id="keyframe-y" type="number" step="1"></label>
+                            <label>Ancho <input id="keyframe-width" type="number" min="60" step="1"></label>
+                            <label>Alto <input id="keyframe-height" type="number" min="30" step="1"></label>
+                            <label>Rotación <input id="keyframe-rotation" type="number" step="1"></label>
+                            <label>Opacidad <input id="keyframe-opacity" type="number" min="0" max="1" step="0.05"></label>
+                            <label>Color <input id="keyframe-color" type="color"></label>
+                            <label>Tamaño texto <input id="keyframe-font-size" type="number" min="8" max="120" step="1"></label>
+                            <label>Tipografía
+                                <select id="keyframe-font-family">
+                                    <option value="Poppins">Poppins</option>
+                                    <option value="Arial">Arial</option>
+                                    <option value="Georgia">Georgia</option>
+                                    <option value="Verdana">Verdana</option>
+                                    <option value="Courier New">Courier New</option>
+                                </select>
+                            </label>
+                            <label>Contenido <textarea id="keyframe-text" rows="2"></textarea></label>
+                            <label>Transición
+                                <select id="keyframe-easing">
+                                    <option value="lineal">Lineal</option>
+                                    <option value="suave">Suave</option>
+                                    <option value="rebote">Rebote</option>
+                                    <option value="instantanea">Instantánea</option>
+                                    <option value="bezier">Bézier</option>
+                                </select>
+                            </label>
+                            <div id="bezier-fields" class="bezier-fields" hidden>
+                                <label>X1 <input id="bezier-x1" type="number" min="0" max="1" step="0.05"></label>
+                                <label>Y1 <input id="bezier-y1" type="number" min="-2" max="2" step="0.05"></label>
+                                <label>X2 <input id="bezier-x2" type="number" min="0" max="1" step="0.05"></label>
+                                <label>Y2 <input id="bezier-y2" type="number" min="-2" max="2" step="0.05"></label>
+                            </div>
+                            <label>Texto
+                                <select id="keyframe-text-mode">
+                                    <option value="instantaneo">Instantáneo</option>
+                                    <option value="escritura">Escritura progresiva</option>
+                                    <option value="transicion">Transición</option>
+                                </select>
+                            </label>
+                                <button id="delete-keyframes" type="button"><i class="fa-regular fa-trash-can" aria-hidden="true"></i> Eliminar selección</button>
+                            </fieldset>
+                            <section class="timeline-loop-range">
+                                <h3>Rango de bucle</h3>
+                                <label>Inicio <input id="loop-start" type="number" min="0" value="0"></label>
+                                <label>Fin <input id="loop-end" type="number" min="1" value="300"></label>
+                            </section>
+                        </div>
+                    </details>
+                </div>
+                <details id="audio-mixer-panel" class="audio-mixer">
+                    <summary><span><i class="fa-solid fa-volume-high" aria-hidden="true"></i><strong>Audio multipista</strong></span><small>Hasta 3 pistas</small></summary>
+                    <div id="audio-waveform-tracks"></div>
+                </details>
+                <details id="animation-template-panel" class="animation-templates">
+                    <summary><span><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><strong>Plantillas de animación</strong></span><small>Guardar y reutilizar</small></summary>
+                    <div class="animation-template-content">
+                        <div class="template-save">
+                            <label>Nombre <input id="animation-template-name" maxlength="100" placeholder="Mi animación"></label>
+                            <button id="save-animation-template" type="button">Guardar selección como plantilla</button>
+                        </div>
+                        <div id="animation-template-list"></div>
+                        <p id="animation-template-status" role="status" aria-live="polite"></p>
+                    </div>
+                </details>
+            </section>
             <footer class="slide-footer" aria-label="Diapositivas">
+                <button id="toggle-timeline" class="toggle-timeline" type="button" aria-expanded="false" aria-controls="timeline-panel" aria-label="Abrir línea de tiempo">
+                    <i class="fa-solid fa-film" aria-hidden="true"></i><span>Línea de tiempo</span>
+                </button>
                 <div id="slide-list" class="slide-list"></div>
                 <div id="slide-context-menu" class="slide-context-menu" role="menu" aria-label="Opciones de diapositiva" hidden>
                     <button id="duplicate-slide" type="button" role="menuitem"><i class="fa-regular fa-copy" aria-hidden="true"></i> Duplicar diapositiva</button>
@@ -290,6 +562,6 @@
     </div>
     <span id="object-count" class="sr-only"></span>
     {{ objetos|json_script:"scene-data" }}
-    <script src="{% static 'editor/js/editor.js' %}?v=28" defer></script>
+    <script src="{% static 'editor/js/editor.js' %}?v=38" defer></script>
 </body>
 </html>

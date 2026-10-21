@@ -27,4 +27,4 @@ class AnimacionMigrationTests(TransactionTestCase):
             self.assertEqual(actualizado.diapositivas[0]["duracion_frames"], 300)
             self.assertEqual(actualizado.propietario_id, user.pk)
         finally:
-            MigrationExecutor(connection).migrate([("editor", "0006_proyecto_diapositivas")])
+            MigrationExecutor(connection).migrate([("editor", "0010_alter_usoia_accion_documentofuente_trabajoconversion")])

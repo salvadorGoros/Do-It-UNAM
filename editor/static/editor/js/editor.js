@@ -11,6 +11,68 @@
     const MAX_OBJECT_HEIGHT = 4500;
     const MIN_OBJECT_WIDTH = 60;
     const MIN_OBJECT_HEIGHT = 30;
+    const MAX_SLIDE_FRAMES = 108000;
+    const FPS = 30;
+    const animatedProperties = ["x", "y", "ancho", "alto", "giro", "opacidad", "color", "tamano", "texto"];
+
+    function basePose(obj) {
+        return {
+            x: obj.x, y: obj.y, ancho: obj.ancho, alto: obj.alto,
+            giro: 0, opacidad: 1, color: obj.color, tamano: obj.tamano,
+            texto: obj.texto, fuente: obj.fuente,
+        };
+    }
+
+    function normalizeKeyframes(obj) {
+        const source = Array.isArray(obj.fotogramas) && obj.fotogramas.length
+            ? [...obj.fotogramas].sort((left, right) => left.frame - right.frame)
+            : [{frame: 0, x: obj.x, y: obj.y, giro: 0, opacidad: 1, interpolacion: "lineal"}];
+        let previous = basePose(obj);
+        obj.fotogramas = source.map(key => {
+            previous = {...previous, ...key};
+            return {
+                frame: key.frame,
+                x: previous.x,
+                y: previous.y,
+                ancho: previous.ancho,
+                alto: previous.alto,
+                giro: previous.giro,
+                opacidad: previous.opacidad,
+                color: previous.color,
+                tamano: previous.tamano,
+                texto: previous.texto,
+                fuente: previous.fuente,
+                interpolacion: key.interpolacion || "lineal",
+                texto_modo: key.texto_modo || "instantaneo",
+                ...(key.interpolacion === "bezier" ? {bezier: key.bezier || [.25, .1, .25, 1]} : {}),
+            };
+        });
+    }
+
+    function normalizeSlide(slide) {
+        slide.color_fondo ||= "#ffffff";
+        slide.audio ||= "";
+        slide.audios = Array.isArray(slide.audios) ? slide.audios : [];
+        if (slide.audio && !slide.audios.some(track => track.path === slide.audio)) {
+            slide.audios.unshift({
+                id: crypto.randomUUID(), path: slide.audio, inicio_frame: 0,
+                recorte_inicio: 0, recorte_fin: null, volumen: 1, silenciado: false,
+                fundido_entrada: 0, fundido_salida: 0,
+            });
+        }
+        slide.audios = slide.audios.slice(0, 3);
+        slide.marcadores = Array.isArray(slide.marcadores) ? slide.marcadores : [];
+        slide.objetos.forEach(normalizeKeyframes);
+        const lastFrame = Math.max(
+            0,
+            ...slide.objetos.flatMap(obj => obj.fotogramas.map(key => key.frame)),
+            ...slide.marcadores.map(marker => marker.frame),
+            ...slide.audios.map(track => track.recorte_fin === null
+                ? track.inicio_frame
+                : track.inicio_frame + (track.recorte_fin - track.recorte_inicio) * FPS),
+        );
+        slide.duracion_frames = clamp(Math.max(slide.duracion_frames || 300, lastFrame), 30, MAX_SLIDE_FRAMES);
+    }
     const rotationGuide = document.createElement("div");
     rotationGuide.className = "rotation-guide";
     rotationGuide.hidden = true;
@@ -27,22 +89,31 @@
             objetos: JSON.parse($("scene-data").textContent),
             fondo: form.elements.fondo.value,
             color_fondo: "#ffffff",
+            audio: "",
             duracion_frames: Number(form.elements.duracion_frames.value) || 300,
         }];
     }
-    slides.forEach(slide => { slide.color_fondo ||= "#ffffff"; });
+    slides.forEach(normalizeSlide);
     let activeSlideIndex = Number(form.elements.diapositiva_activa.value) || 0;
     activeSlideIndex = clamp(activeSlideIndex, 0, slides.length - 1);
     let objects = slides[activeSlideIndex].objetos;
     const assetBase = stage.dataset.assetBase;
     const uploadedImageBase = stage.dataset.uploadedImageBase;
+    const uploadedAudioBase = stage.dataset.uploadedAudioBase;
     const imageUrl = path => {
         if (!path.startsWith("uploads/")) return `${assetBase}${encodeURI(path)}`;
         const [, ownerId, filename] = path.split("/");
         return `${uploadedImageBase}${ownerId}/${encodeURIComponent(filename)}/`;
     };
+    const audioUrl = path => {
+        if (!path) return "";
+        const [, ownerId, filename] = path.split("/");
+        return `${uploadedAudioBase}${ownerId}/${encodeURIComponent(filename)}/`;
+    };
     let activeBackground = slides[activeSlideIndex].fondo;
     let activeSlideColor = slides[activeSlideIndex].color_fondo;
+    let activeAudios = slides[activeSlideIndex].audios;
+    let selectedAudioTrackId = activeAudios[0]?.id || null;
     let savedName = form.elements.nombre.value;
     let savedScene = JSON.stringify(objects);
     let savedBackground = activeBackground;
@@ -61,6 +132,21 @@
     let objectClipboard = null;
     let slideClipboard = null;
     let playbackTimer = null;
+    let playbackRequest = null;
+    let timelineRunning = false;
+    let currentFrame = 0;
+    let playbackStartedAt = 0;
+    let playbackStartFrame = 0;
+    let waitingMarker = null;
+    let consumedMarkers = new Set();
+    let loopEnabled = false;
+    let loopStart = 0;
+    let loopEnd = slides[activeSlideIndex].duracion_frames;
+    let timelinePixelsPerSecond = 100;
+    const selectedKeyframes = new Set();
+    const expandedObjects = new Set();
+    const audioPlayers = new Map();
+    const audioBuffers = new Map();
     let saveWaiters = [];
     let historyTimer = null;
     let historyEntries = [];
@@ -70,9 +156,17 @@
     let restoringHistory = false;
     let hasErrors = Boolean(document.querySelector(".errorlist"));
     let saveErrorVisible = !$("save-status").hidden;
+    let aiConfigured = false;
+    let aiCanGenerate = false;
+    let aiPresentationResult = null;
+    let aiTextResult = null;
+    let aiImageResult = null;
+    let aiDocumentResult = null;
+    let activeDocumentJob = null;
+    let documentPollTimer = null;
     const current = () => objects.find(obj => obj.id === selected);
     const node = id => [...stage.children].find(el => el.dataset.id === id);
-    const objectRotation = obj => obj.fotogramas?.find(frame => frame.frame === 0)?.giro || 0;
+    const objectRotation = obj => evaluateObject(obj, $("timeline-panel").hidden ? 0 : currentFrame).giro || 0;
     const displayRotation = angle => {
         const normalized = ((angle % 360) + 360) % 360;
         const signed = normalized > 180 ? normalized - 360 : normalized;
@@ -120,6 +214,8 @@
         slide.objetos = objects;
         slide.fondo = activeBackground;
         slide.color_fondo = activeSlideColor;
+        slide.audios = activeAudios;
+        slide.audio = activeAudios[0]?.path || "";
         slide.duracion_frames = Number($("slide-duration").value) * 30;
         form.elements.objetos.value = JSON.stringify(objects);
         form.elements.fondo.value = activeBackground;
@@ -203,6 +299,8 @@
         objects = slides[activeSlideIndex].objetos;
         activeBackground = slides[activeSlideIndex].fondo;
         activeSlideColor = slides[activeSlideIndex].color_fondo || "#ffffff";
+        activeAudios = slides[activeSlideIndex].audios || [];
+        selectedAudioTrackId = activeAudios[0]?.id || null;
         selected = null;
         editing = null;
         stage.replaceChildren();
@@ -211,9 +309,17 @@
             ? `url("${assetBase}${encodeURI(activeBackground)}")`
             : "none";
         stage.style.backgroundColor = activeSlideColor;
+        updateSelectedAudio();
         updateSlideColorPicker();
+        updateAINotes();
         objects.forEach(mount);
         select(snapshot.selected && objects.some(obj => obj.id === snapshot.selected) ? snapshot.selected : null);
+        currentFrame = 0;
+        applyFrame(0);
+        if (!$("timeline-panel").hidden) {
+            renderTimeline();
+            renderAudioMixer();
+        }
         renderSlideList();
         sync();
         restoringHistory = false;
@@ -335,6 +441,189 @@
         }
     }
 
+    function cubicBezierValue(x, values) {
+        const [x1, y1, x2, y2] = values;
+        const sample = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+        let low = 0, high = 1, t = x;
+        for (let index = 0; index < 12; index++) {
+            const currentX = sample(t, x1, x2);
+            if (Math.abs(currentX - x) < .0005) break;
+            if (currentX < x) low = t;
+            else high = t;
+            t = (low + high) / 2;
+        }
+        return sample(t, y1, y2);
+    }
+
+    function easedProgress(t, key) {
+        if (key.interpolacion === "instantanea") return t < 1 ? 0 : 1;
+        if (key.interpolacion === "suave") return t * t * (3 - 2 * t);
+        if (key.interpolacion === "rebote") {
+            const n1 = 7.5625, d1 = 2.75;
+            if (t < 1 / d1) return n1 * t * t;
+            if (t < 2 / d1) return n1 * (t -= 1.5 / d1) * t + .75;
+            if (t < 2.5 / d1) return n1 * (t -= 2.25 / d1) * t + .9375;
+            return n1 * (t -= 2.625 / d1) * t + .984375;
+        }
+        if (key.interpolacion === "bezier") return cubicBezierValue(t, key.bezier || [.25, .1, .25, 1]);
+        return t;
+    }
+
+    function hexToRgb(color) {
+        const value = Number.parseInt(color.slice(1), 16);
+        return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+    }
+
+    function interpolateColor(left, right, t) {
+        const a = hexToRgb(left), b = hexToRgb(right);
+        return `#${a.map((value, index) => Math.round(value + (b[index] - value) * t).toString(16).padStart(2, "0")).join("")}`;
+    }
+
+    function evaluateObject(obj, frame) {
+        const keys = obj.fotogramas;
+        if (frame <= keys[0].frame) return {...keys[0], textOpacity: 1};
+        const last = keys.at(-1);
+        if (frame >= last.frame) return {...last, textOpacity: 1};
+        const nextIndex = keys.findIndex(key => key.frame > frame);
+        const left = keys[nextIndex - 1], right = keys[nextIndex];
+        const raw = (frame - left.frame) / (right.frame - left.frame);
+        const t = easedProgress(raw, left);
+        const pose = {...left};
+        for (const property of ["x", "y", "ancho", "alto", "giro", "opacidad", "tamano"]) {
+            pose[property] = left[property] + (right[property] - left[property]) * t;
+        }
+        pose.color = interpolateColor(left.color, right.color, clamp(t, 0, 1));
+        pose.fuente = raw < .5 ? left.fuente : right.fuente;
+        const mode = right.texto_modo || "instantaneo";
+        if (mode === "escritura") {
+            pose.texto = right.texto.slice(0, Math.round(right.texto.length * clamp(t, 0, 1)));
+            pose.textOpacity = 1;
+        } else if (mode === "transicion") {
+            pose.texto = raw < .5 ? left.texto : right.texto;
+            pose.textOpacity = Math.abs(raw - .5) * 2;
+        } else {
+            pose.texto = raw < 1 ? left.texto : right.texto;
+            pose.textOpacity = 1;
+        }
+        return pose;
+    }
+
+    function applyFrame(frame) {
+        for (const obj of objects) {
+            const element = node(obj.id);
+            if (!element) continue;
+            const pose = evaluateObject(obj, frame);
+            element.style.left = `${pose.x}px`;
+            element.style.top = `${pose.y}px`;
+            element.style.width = `${pose.ancho}px`;
+            element.style.height = `${pose.alto}px`;
+            element.style.transform = `rotate(${pose.giro}deg)`;
+            element.style.opacity = pose.opacidad;
+            const content = element.querySelector("textarea");
+            if (content) {
+                if (editing !== obj.id) content.value = pose.texto;
+                content.style.fontFamily = `${pose.fuente}, sans-serif`;
+                content.style.fontSize = `${pose.tamano}px`;
+                content.style.color = pose.color;
+                content.style.opacity = pose.textOpacity;
+            }
+        }
+    }
+
+    function updateTimelinePosition() {
+        const duration = slides[activeSlideIndex].duracion_frames;
+        const bounded = clamp(currentFrame, 0, duration);
+        $("timeline-time").textContent = `${String(Math.floor(bounded / FPS / 60)).padStart(2, "0")}:${String(Math.floor(bounded / FPS) % 60).padStart(2, "0")}.${String(Math.round((bounded % FPS) / FPS * 100)).padStart(2, "0")} · F${Math.round(bounded)}`;
+        $("timeline-playhead").style.left = `${150 + bounded / FPS * timelinePixelsPerSecond}px`;
+    }
+
+    function setTimelineFrame(frame, seekAudio = true) {
+        currentFrame = clamp(Math.round(frame), 0, slides[activeSlideIndex].duracion_frames);
+        applyFrame(currentFrame);
+        updateTimelinePosition();
+        if (seekAudio && !timelineRunning) syncAudioPlayers(currentFrame, false);
+    }
+
+    function keyframeSnapshot(obj, frame = currentFrame) {
+        const pose = evaluateObject(obj, frame);
+        return {
+            frame: Math.round(frame), x: pose.x, y: pose.y, ancho: pose.ancho, alto: pose.alto,
+            giro: pose.giro, opacidad: pose.opacidad, color: pose.color, tamano: pose.tamano,
+            texto: pose.texto, fuente: pose.fuente, interpolacion: "suave",
+            texto_modo: "instantaneo",
+        };
+    }
+
+    function extendDurationTo(frame) {
+        const slide = slides[activeSlideIndex];
+        if (frame <= slide.duracion_frames) return;
+        slide.duracion_frames = clamp(Math.ceil(frame), 30, MAX_SLIDE_FRAMES);
+        $("slide-duration").value = String(Math.ceil(slide.duracion_frames / FPS));
+        loopEnd = slide.duracion_frames;
+        $("loop-end").value = String(loopEnd);
+    }
+
+    function addKeyframeForObject(obj, frame = currentFrame, selectKey = true) {
+        if (!obj) return null;
+        const roundedFrame = clamp(Math.round(frame), 0, MAX_SLIDE_FRAMES);
+        extendDurationTo(roundedFrame);
+        let key = obj.fotogramas.find(item => item.frame === roundedFrame);
+        if (!key) {
+            key = keyframeSnapshot(obj, roundedFrame);
+            obj.fotogramas.push(key);
+            obj.fotogramas.sort((left, right) => left.frame - right.frame);
+        }
+        if (selectKey) {
+            selectedKeyframes.clear();
+            selectedKeyframes.add(`${obj.id}:${key.frame}`);
+        }
+        renderTimeline();
+        renderMotionPath();
+        sync();
+        return key;
+    }
+
+    function renderMotionPath() {
+        stage.querySelector(".motion-path-overlay")?.remove();
+        const obj = current();
+        if (!obj || obj.fotogramas.length < 2 || $("timeline-panel").hidden) return;
+        const namespace = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(namespace, "svg");
+        svg.classList.add("motion-path-overlay");
+        const polyline = document.createElementNS(namespace, "polyline");
+        polyline.classList.add("motion-path-line");
+        polyline.setAttribute("points", obj.fotogramas.map(key => `${key.x + key.ancho / 2},${key.y + key.alto / 2}`).join(" "));
+        svg.append(polyline);
+        for (const key of obj.fotogramas) {
+            const point = document.createElementNS(namespace, "circle");
+            point.classList.add("motion-path-point");
+            point.setAttribute("cx", key.x + key.ancho / 2);
+            point.setAttribute("cy", key.y + key.alto / 2);
+            point.setAttribute("r", "6");
+            point.addEventListener("pointerdown", event => {
+                event.preventDefault();
+                const startX = event.clientX, startY = event.clientY;
+                const originalX = key.x, originalY = key.y;
+                const move = moveEvent => {
+                    key.x = clamp(originalX + (moveEvent.clientX - startX) / scale, MIN_OBJECT_POSITION, MAX_OBJECT_POSITION);
+                    key.y = clamp(originalY + (moveEvent.clientY - startY) / scale, MIN_OBJECT_POSITION, MAX_OBJECT_POSITION);
+                    setTimelineFrame(key.frame, false);
+                    renderMotionPath();
+                };
+                const up = () => {
+                    window.removeEventListener("pointermove", move);
+                    window.removeEventListener("pointerup", up);
+                    sync();
+                    commitHistory();
+                };
+                window.addEventListener("pointermove", move);
+                window.addEventListener("pointerup", up, {once: true});
+            });
+            svg.append(point);
+        }
+        stage.append(svg);
+    }
+
     function updateAnimationPanel() {
         const obj = current();
         const scope = $("animation-scope").value;
@@ -349,10 +638,10 @@
                 ? "Selecciona un texto o elemento para aplicarle una animación."
                 : "Se aplicará a los objetos del alcance seleccionado.";
         for (const button of document.querySelectorAll(".animation-choice")) {
-            button.setAttribute("aria-pressed", String(Boolean(obj) && (obj.animacion || "ninguna") === button.dataset.animation));
+            button.setAttribute("aria-pressed", String(Boolean(obj) && (obj.animacion || "ninguna") === button.dataset.keyframePreset));
             button.disabled = !canApply;
         }
-        $("preview-animation").disabled = !objects.some(obj => (obj.animacion || "ninguna") !== "ninguna");
+        $("preview-animation").disabled = !objects.some(obj => obj.fotogramas.length > 1);
     }
 
     function select(id) {
@@ -381,15 +670,19 @@
             }
         }
         updateAnimationPanel();
+        renderMotionPath();
+        if (!$("timeline-panel").hidden) renderTimeline();
     }
 
     function setObjectRotation(obj, rotation) {
-        const firstFrame = obj.fotogramas.find(frame => frame.frame === 0);
-        if (firstFrame) {
-            firstFrame.giro = rotation;
+        const editedFrame = $("timeline-panel").hidden ? 0 : currentFrame;
+        const keyframe = obj.fotogramas.find(frame => frame.frame === editedFrame)
+            || addKeyframeForObject(obj, editedFrame, false);
+        if (keyframe) {
+            keyframe.giro = rotation;
         } else {
             obj.fotogramas.push({
-                frame: 0,
+                frame: editedFrame,
                 x: obj.x,
                 y: obj.y,
                 giro: rotation,
@@ -446,6 +739,10 @@
             content.setAttribute("aria-label", "Contenido del cuadro de texto");
             content.addEventListener("input", () => {
                 obj.texto = content.value;
+                const editedFrame = $("timeline-panel").hidden ? 0 : currentFrame;
+                const keyframe = obj.fotogramas.find(frame => frame.frame === editedFrame)
+                    || addKeyframeForObject(obj, editedFrame, false);
+                if (keyframe) keyframe.texto = obj.texto;
                 updateAnimationPanel();
                 sync();
                 historyPending = true;
@@ -494,10 +791,20 @@
         });
         el.addEventListener("pointerdown", event => {
             if (event.button !== 0) return;
+            if (playing) {
+                if (waitingMarker?.objeto_id === obj.id) {
+                    event.preventDefault();
+                    resumeAfterMarker();
+                }
+                return;
+            }
+            if (!playing && currentFrame !== 0 && $("timeline-panel").hidden) setTimelineFrame(0);
             select(obj.id);
             if (editing === obj.id && event.target === content) return;
             event.preventDefault();
             el.focus();
+            const editedKey = $("timeline-panel").hidden ? null : addKeyframeForObject(obj, currentFrame, false);
+            const displayedPose = evaluateObject(obj, currentFrame);
             gesture = {
                 id: obj.id,
                 pointer: event.pointerId,
@@ -506,17 +813,18 @@
                 handle: event.target instanceof Element ? event.target.dataset.handle : null,
                 sx: event.clientX,
                 sy: event.clientY,
-                rotation: objectRotation(obj),
+                rotation: displayedPose.giro,
                 startAngle: event.target === rotateHandle
                     ? Math.atan2(
                         event.clientY - (el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2),
                         event.clientX - (el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2),
                     ) * 180 / Math.PI
                     : 0,
-                x: obj.x,
-                y: obj.y,
-                width: obj.ancho,
-                height: obj.alto,
+                x: displayedPose.x,
+                y: displayedPose.y,
+                width: displayedPose.ancho,
+                height: displayedPose.alto,
+                keyframe: editedKey,
             };
             el.setPointerCapture(event.pointerId);
         });
@@ -570,9 +878,12 @@
             el.style.width = `${obj.ancho}px`;
             el.style.height = `${obj.alto}px`;
             el.style.transform = `rotate(${objectRotation(obj)}deg)`;
-            for (const key of ["x", "y"]) {
-                const firstFrame = obj.fotogramas?.[0];
-                if (firstFrame?.frame === 0) firstFrame[key] = obj[key];
+            const editedFrame = gesture.keyframe || obj.fotogramas?.find(frame => frame.frame === 0);
+            if (editedFrame) {
+                editedFrame.x = obj.x;
+                editedFrame.y = obj.y;
+                editedFrame.ancho = obj.ancho;
+                editedFrame.alto = obj.alto;
             }
             sync();
             historyPending = true;
@@ -582,6 +893,10 @@
             el.addEventListener(eventName, () => {
                 if (gesture?.id === obj.id && gesture.rotate) hideRotationGuide();
                 gesture = null;
+                if (!$("timeline-panel").hidden) {
+                    renderTimeline();
+                    renderMotionPath();
+                }
                 commitHistory();
             });
         }
@@ -624,6 +939,7 @@
             animacion: "ninguna",
             fotogramas: [{frame: 0, x: 200 + offset, y: 140 + offset, giro: 0, opacidad: 1, interpolacion: "lineal"}],
         };
+        normalizeKeyframes(obj);
         objects.push(obj);
         mount(obj);
         select(obj.id);
@@ -656,6 +972,7 @@
             animacion: "ninguna",
             fotogramas: [{frame: 0, x: 300 + offset, y: 150 + offset, giro: 0, opacidad: 1, interpolacion: "lineal"}],
         };
+        normalizeKeyframes(obj);
         objects.push(obj);
         mount(obj);
         select(obj.id);
@@ -679,6 +996,8 @@
         slides[activeSlideIndex].objetos = objects;
         slides[activeSlideIndex].fondo = activeBackground;
         slides[activeSlideIndex].color_fondo = activeSlideColor;
+        slides[activeSlideIndex].audios = activeAudios;
+        slides[activeSlideIndex].audio = activeAudios[0]?.path || "";
         slides[activeSlideIndex].duracion_frames = Number($("slide-duration").value) * 30;
     }
 
@@ -727,7 +1046,7 @@
             const title = document.createElement("span");
             title.textContent = `Diapositiva ${index + 1}`;
             const details = document.createElement("small");
-            details.textContent = `${slide.objetos.length} objetos · ${Math.round(slide.duracion_frames / 30)} s`;
+            details.textContent = `${slide.objetos.length} objetos · ${Math.round(slide.duracion_frames / 30)} s${slide.audios?.length ? ` · ${slide.audios.length} audio${slide.audios.length === 1 ? "" : "s"}` : ""}`;
             button.append(title, details);
             button.addEventListener("click", () => showSlide(index));
             button.addEventListener("contextmenu", event => {
@@ -748,10 +1067,28 @@
                 if (dragIndex === "") return;
                 const from = Number(dragIndex);
                 const bounds = button.getBoundingClientRect();
-                const insertionIndex = event.clientX < bounds.left + bounds.width / 2 ? index : index + 1;
+                const timelineLayout = document.body.classList.contains("timeline-open");
+                const beforeSlide = timelineLayout
+                    ? event.clientY < bounds.top + bounds.height / 2
+                    : event.clientX < bounds.left + bounds.width / 2;
+                const insertionIndex = beforeSlide ? index : index + 1;
                 reorderSlide(from, insertionIndex);
             });
-            list.append(button);
+            const wrapper = document.createElement("div");
+            wrapper.className = "slide-thumb-wrap";
+            const options = document.createElement("button");
+            options.type = "button";
+            options.className = "slide-options-trigger";
+            options.innerHTML = '<i class="fa-solid fa-ellipsis" aria-hidden="true"></i>';
+            options.setAttribute("aria-label", `Opciones de la diapositiva ${index + 1}`);
+            options.addEventListener("click", event => {
+                event.stopPropagation();
+                const bounds = options.getBoundingClientRect();
+                showSlide(index);
+                openSlideContextMenu(bounds.right, bounds.top);
+            });
+            wrapper.append(button, options);
+            list.append(wrapper);
         }
         $("presentation-count").textContent = `${activeSlideIndex + 1} / ${slides.length}`;
         sync();
@@ -759,12 +1096,19 @@
 
     function showSlide(index, storeCurrent = true) {
         if (index < 0 || index >= slides.length) return;
+        if (timelineRunning) pauseTimeline();
+        stopAudioPlayers();
         if (storeCurrent) storeCurrentSlide();
         stopEditing();
         activeSlideIndex = index;
         objects = slides[index].objetos;
         activeBackground = slides[index].fondo;
         activeSlideColor = slides[index].color_fondo || "#ffffff";
+        activeAudios = slides[index].audios || [];
+        selectedAudioTrackId = activeAudios[0]?.id || null;
+        currentFrame = 0;
+        loopStart = 0;
+        loopEnd = slides[index].duracion_frames;
         $("slide-duration").value = String(Math.round(slides[index].duracion_frames / 30));
         form.elements.diapositiva_activa.value = String(index);
         stage.replaceChildren();
@@ -773,8 +1117,15 @@
             : "none";
         stage.style.backgroundColor = activeSlideColor;
         updateSlideColorPicker();
+        updateSelectedAudio();
+        updateAINotes();
         objects.forEach(mount);
         select(null);
+        applyFrame(0);
+        if (!$("timeline-panel").hidden) {
+            renderTimeline();
+            renderAudioMixer();
+        }
         renderSlideList();
         sync();
     }
@@ -794,6 +1145,9 @@
             objetos: [],
             fondo: "",
             color_fondo: "#ffffff",
+            audio: "",
+            audios: [],
+            marcadores: [],
             duracion_frames: 300,
         });
         showSlide(index, false);
@@ -882,14 +1236,428 @@
         $("asset-panel-title").textContent = {
             elementos: "Elementos",
             imagenes: "Subir",
+            ia: "Asistente con IA",
             fondos: "Fondos",
+            audios: "Audio",
             animaciones: "Animar",
         }[section];
-        for (const tool of [$("images-tool"), $("elements-tool"), $("background-tool"), $("animation-tool")]) {
+        for (const tool of [$("images-tool"), $("ai-tool"), $("elements-tool"), $("background-tool"), $("audio-tool"), $("animation-tool")]) {
             tool.setAttribute("aria-expanded", String(!isOpen && tool === button));
             tool.classList.toggle("tool-active", !isOpen && tool === button);
         }
         if (!isOpen && section === "imagenes") loadUploadedImages();
+        if (!isOpen && section === "audios") loadUploadedAudios();
+        if (!isOpen && section === "ia") {
+            const obj = current();
+            if (!$("ai-text-source").value && obj && obj.tipo !== "imagen") {
+                $("ai-text-source").value = obj.texto;
+            }
+            updateAINotes();
+            loadAIStatus();
+        }
+    }
+
+    function closeAssetPanel() {
+        $("asset-panel").hidden = true;
+        $("asset-panel").dataset.section = "";
+        for (const tool of [$("images-tool"), $("ai-tool"), $("elements-tool"), $("background-tool"), $("audio-tool"), $("animation-tool")]) {
+            tool.setAttribute("aria-expanded", "false");
+            tool.classList.remove("tool-active");
+        }
+    }
+
+    function closeAssetPanelOnCompactScreen() {
+        if (window.matchMedia("(max-width: 760px), (max-height: 600px) and (max-width: 950px)").matches) {
+            closeAssetPanel();
+        }
+    }
+
+    function setAIMessage(message, error = false) {
+        $("ai-message").textContent = message;
+        $("ai-message").classList.toggle("error", error);
+    }
+
+    function updateAINotes() {
+        $("ai-slide-notes").value = slides[activeSlideIndex]?.notas || "";
+    }
+
+    function setAIGenerationDisabled(disabled) {
+        document.querySelectorAll(".ai-primary").forEach(button => {
+            button.disabled = disabled;
+        });
+    }
+
+    function updateAIState(state) {
+        aiConfigured = Boolean(state.configured);
+        const connection = $("ai-connection");
+        connection.classList.toggle("configured", aiConfigured);
+        connection.classList.toggle("not-configured", !aiConfigured);
+        $("ai-connection-text").textContent = aiConfigured
+            ? `Clave configurada · ${state.text_model}`
+            : "Falta GEMINI_API_KEY en el archivo .env";
+        const quota = state.quota || {used: 0, limit: 0, remaining: 0};
+        const roleName = state.role?.name || "Cuenta";
+        $("ai-quota").textContent = `${roleName} · uso de hoy: ${Number(quota.used).toLocaleString("es-MX")} / ${Number(quota.limit).toLocaleString("es-MX")} tokens`;
+        aiCanGenerate = aiConfigured && quota.remaining > 0;
+        setAIGenerationDisabled(!aiCanGenerate);
+        if (state.conversion) renderDocumentConversion(state.conversion);
+    }
+
+    async function loadAIStatus() {
+        const gallery = document.querySelector('[data-gallery="ia"]');
+        try {
+            const response = await fetch(gallery.dataset.statusUrl, {credentials: "same-origin"});
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudo consultar Gemini.");
+            updateAIState(result);
+            if (!result.configured) {
+                setAIMessage("Pega tu clave en .env y reinicia el servidor para habilitar estas herramientas.");
+            } else setAIMessage("");
+        } catch (error) {
+            aiConfigured = false;
+            aiCanGenerate = false;
+            setAIGenerationDisabled(true);
+            $("ai-connection").classList.add("not-configured");
+            $("ai-connection-text").textContent = "No se pudo comprobar Gemini";
+            setAIMessage(error.message, true);
+        }
+    }
+
+    async function requestAI(payload, button, progressMessage) {
+        const gallery = document.querySelector('[data-gallery="ia"]');
+        button.disabled = true;
+        setAIMessage(progressMessage);
+        try {
+            const response = await fetch(gallery.dataset.generateUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": form.elements.csrfmiddlewaretoken.value,
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (result.state) updateAIState(result.state);
+            if (!response.ok) throw new Error(result.error || "Gemini no pudo completar la solicitud.");
+            return result;
+        } catch (error) {
+            setAIMessage(error.message, true);
+            return null;
+        } finally {
+            button.disabled = !aiCanGenerate;
+        }
+    }
+
+    function makeAITextObject(text, options = {}) {
+        const x = options.x ?? 60;
+        const y = options.y ?? 50;
+        const obj = {
+            id: crypto.randomUUID(),
+            texto: text,
+            x,
+            y,
+            ancho: options.width ?? 680,
+            alto: options.height ?? 100,
+            fuente: "Poppins",
+            tamano: options.size ?? 28,
+            color: options.color ?? "#0f172a",
+            negrita: Boolean(options.bold),
+            cursiva: false,
+            subrayado: false,
+            alineacion: options.align || "left",
+            animacion: "ninguna",
+            fotogramas: [{frame: 0, x, y, giro: 0, opacidad: 1, interpolacion: "lineal"}],
+        };
+        normalizeKeyframes(obj);
+        return obj;
+    }
+
+    function makeAISlide(data) {
+        const title = makeAITextObject(data.title, {
+            x: 55, y: 35, width: 690, height: 70, size: 30,
+            color: "#0b3b60", bold: true, align: "center",
+        });
+        const bullets = makeAITextObject(data.bullets.map(item => `• ${item}`).join("\n"), {
+            x: 70, y: 125, width: 660, height: 270,
+            size: data.bullets.join(" ").length > 700 ? 17 : 21,
+        });
+        const slide = {
+            id: crypto.randomUUID(),
+            objetos: [title, bullets],
+            fondo: "",
+            color_fondo: "#ffffff",
+            audio: "",
+            audios: [],
+            marcadores: [],
+            notas: `${data.speaker_notes}\n\nSugerencia visual: ${data.visual_suggestion}`,
+            duracion_frames: 450,
+        };
+        normalizeSlide(slide);
+        return slide;
+    }
+
+    async function generateAIPresentation() {
+        const button = $("ai-generate-presentation");
+        const topic = $("ai-presentation-topic").value.trim();
+        if (topic.length < 3) {
+            setAIMessage("Describe el tema de la presentación.", true);
+            return;
+        }
+        const result = await requestAI({
+            action: "presentation",
+            topic,
+            slide_count: Number($("ai-slide-count").value),
+            audience: $("ai-audience").value,
+            style: $("ai-presentation-style").value,
+        }, button, "Gemini está preparando la estructura…");
+        if (!result) return;
+        aiPresentationResult = result.presentation;
+        $("ai-presentation-title").textContent = aiPresentationResult.title;
+        const preview = $("ai-presentation-preview");
+        preview.replaceChildren();
+        aiPresentationResult.slides.forEach(slide => {
+            const item = document.createElement("li");
+            item.textContent = slide.title;
+            preview.append(item);
+        });
+        $("ai-presentation-result").hidden = false;
+        setAIMessage(`Estructura lista · ${result.usage.total.toLocaleString("es-MX")} tokens.`);
+    }
+
+    function applyAIPresentation() {
+        if (!aiPresentationResult) return;
+        if (slides.length + aiPresentationResult.slides.length > 100) {
+            setAIMessage("La presentación superaría el máximo de 100 diapositivas.", true);
+            return;
+        }
+        storeCurrentSlide();
+        const generated = aiPresentationResult.slides.map(makeAISlide);
+        const insertionIndex = activeSlideIndex + 1;
+        slides.splice(insertionIndex, 0, ...generated);
+        showSlide(insertionIndex, false);
+        commitHistory();
+        setAIMessage(`Se agregaron ${generated.length} diapositivas editables con sus guiones.`);
+    }
+
+    function scheduleDocumentPoll(job) {
+        clearTimeout(documentPollTimer);
+        documentPollTimer = null;
+        if (!job || !["pendiente", "procesando"].includes(job.status)) return;
+        documentPollTimer = setTimeout(async () => {
+            try {
+                const response = await fetch(job.status_url, {credentials: "same-origin"});
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.error || "No se pudo consultar la conversión.");
+                renderDocumentConversion(result.conversion);
+            } catch (error) {
+                setAIMessage(error.message, true);
+                scheduleDocumentPoll(activeDocumentJob);
+            }
+        }, 1800);
+    }
+
+    function renderDocumentConversion(job) {
+        if (!job) return;
+        activeDocumentJob = job;
+        const container = $("ai-document-job");
+        const active = ["pendiente", "procesando"].includes(job.status);
+        container.hidden = false;
+        container.classList.toggle("is-failed", ["fallido", "cancelado"].includes(job.status));
+        container.classList.toggle("is-completed", job.status === "completado");
+        $("ai-document-filename").textContent = job.filename;
+        $("ai-document-percent").textContent = `${job.progress}%`;
+        $("ai-document-progress").value = job.progress;
+        $("ai-document-status").textContent = job.error || job.message;
+        $("ai-cancel-document").hidden = !active;
+        $("ai-retry-document").hidden = !["fallido", "cancelado"].includes(job.status);
+        $("ai-convert-document").disabled = active || !aiCanGenerate;
+
+        const resultContainer = $("ai-document-result");
+        if (job.status === "completado" && job.presentation) {
+            aiDocumentResult = job.presentation;
+            $("ai-document-title").textContent = aiDocumentResult.title;
+            const preview = $("ai-document-preview");
+            preview.replaceChildren();
+            aiDocumentResult.slides.forEach(slide => {
+                const item = document.createElement("li");
+                item.textContent = slide.title;
+                preview.append(item);
+            });
+            resultContainer.hidden = false;
+            setAIMessage(`Documento convertido en ${aiDocumentResult.slides.length} diapositivas editables.`);
+        } else {
+            resultContainer.hidden = true;
+            aiDocumentResult = null;
+        }
+        scheduleDocumentPoll(job);
+    }
+
+    async function convertAIDocument() {
+        const input = $("ai-document-file");
+        const file = input.files[0];
+        if (!file) {
+            setAIMessage("Selecciona un archivo PDF o PPTX.", true);
+            return;
+        }
+        if (file.size > 50 * 1024 * 1024) {
+            setAIMessage("El documento debe pesar 50 MB o menos.", true);
+            return;
+        }
+        const button = $("ai-convert-document");
+        const gallery = document.querySelector('[data-gallery="ia"]');
+        const payload = new FormData();
+        payload.append("document", file);
+        payload.append("slide_count", $("ai-document-slide-count").value);
+        payload.append("audience", $("ai-document-audience").value);
+        payload.append("style", $("ai-document-style").value);
+        button.disabled = true;
+        setAIMessage("Subiendo el documento de forma privada…");
+        try {
+            const response = await fetch(gallery.dataset.documentUploadUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {"X-CSRFToken": form.elements.csrfmiddlewaretoken.value},
+                body: payload,
+            });
+            const result = await response.json().catch(() => ({}));
+            if (result.conversion) renderDocumentConversion(result.conversion);
+            if (!response.ok) throw new Error(result.error || result.conversion?.error || "No se pudo iniciar la conversión.");
+            if (["pendiente", "procesando"].includes(result.conversion?.status)) {
+                setAIMessage("Conversión iniciada. Puedes seguir editando mientras se procesa.");
+            }
+        } catch (error) {
+            setAIMessage(error.message, true);
+        } finally {
+            button.disabled = ["pendiente", "procesando"].includes(activeDocumentJob?.status) || !aiCanGenerate;
+        }
+    }
+
+    async function requestDocumentAction(url) {
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "X-CSRFToken": form.elements.csrfmiddlewaretoken.value,
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            });
+            const result = await response.json().catch(() => ({}));
+            if (result.conversion) renderDocumentConversion(result.conversion);
+            if (!response.ok) throw new Error(result.error || "No se pudo actualizar la conversión.");
+        } catch (error) {
+            setAIMessage(error.message, true);
+        }
+    }
+
+    function applyAIDocument() {
+        if (!aiDocumentResult) return;
+        aiPresentationResult = aiDocumentResult;
+        applyAIPresentation();
+    }
+
+    async function generateAIText() {
+        const selectedObject = current();
+        const source = $("ai-text-source").value.trim()
+            || (selectedObject && selectedObject.tipo !== "imagen" ? selectedObject.texto : "");
+        if (!source) {
+            setAIMessage("Selecciona un objeto de texto o escribe contenido para procesar.", true);
+            return;
+        }
+        const textAction = $("ai-text-action").value;
+        const result = await requestAI({
+            action: "text",
+            text_action: textAction,
+            source,
+            instruction: $("ai-text-instruction").value,
+        }, $("ai-generate-text"), "Gemini está trabajando el texto…");
+        if (!result) return;
+        aiTextResult = {
+            text: result.text,
+            action: textAction,
+            slideId: slides[activeSlideIndex].id,
+            targetId: selectedObject?.tipo !== "imagen" ? selectedObject?.id : null,
+        };
+        $("ai-text-output").value = result.text;
+        $("ai-apply-text").textContent = textAction === "guion"
+            ? "Guardar como guion de la diapositiva"
+            : selectedObject?.tipo !== "imagen"
+                ? "Aplicar al objeto seleccionado"
+                : "Agregar como texto a la diapositiva";
+        $("ai-text-result").hidden = false;
+        setAIMessage(`Texto listo · ${result.usage.total.toLocaleString("es-MX")} tokens.`);
+    }
+
+    function applyAIText() {
+        if (!aiTextResult) return;
+        const slideIndex = slides.findIndex(slide => slide.id === aiTextResult.slideId);
+        if (slideIndex < 0) {
+            setAIMessage("La diapositiva original ya no existe.", true);
+            return;
+        }
+        if (slideIndex !== activeSlideIndex) showSlide(slideIndex);
+        if (aiTextResult.action === "guion") {
+            slides[slideIndex].notas = aiTextResult.text;
+            updateAINotes();
+            sync();
+            commitHistory();
+            setAIMessage("El guion se guardó en las notas de la diapositiva.");
+            return;
+        }
+        if (aiTextResult.text.length > 5000) {
+            setAIMessage("El resultado supera 5000 caracteres; redúcelo antes de colocarlo en el lienzo.", true);
+            return;
+        }
+        let obj = slides[slideIndex].objetos.find(item => item.id === aiTextResult.targetId && item.tipo !== "imagen");
+        if (!obj) {
+            if (objects.length >= 100) {
+                setAIMessage("La diapositiva ya tiene 100 objetos.", true);
+                return;
+            }
+            obj = makeAITextObject(aiTextResult.text, {x: 120, y: 120, width: 560, height: 210, size: 24});
+            objects.push(obj);
+            mount(obj);
+        } else {
+            obj.texto = aiTextResult.text;
+            const firstFrame = obj.fotogramas.find(frame => frame.frame === 0);
+            if (firstFrame) firstFrame.texto = aiTextResult.text;
+            node(obj.id).querySelector("textarea").value = aiTextResult.text;
+        }
+        select(obj.id);
+        sync();
+        commitHistory();
+        setAIMessage("El texto se aplicó y permanece totalmente editable.");
+    }
+
+    async function generateAIImage() {
+        const prompt = $("ai-image-prompt").value.trim();
+        if (prompt.length < 3) {
+            setAIMessage("Describe la imagen o diagrama que necesitas.", true);
+            return;
+        }
+        const result = await requestAI({
+            action: "image",
+            prompt,
+            image_type: $("ai-image-type").value,
+            aspect_ratio: $("ai-aspect-ratio").value,
+        }, $("ai-generate-image"), "Gemini está generando la imagen…");
+        if (!result) return;
+        aiImageResult = result.image;
+        $("ai-image-preview").src = aiImageResult.url;
+        $("ai-image-result").hidden = false;
+        setAIMessage(`Imagen guardada en tu biblioteca · ${result.usage.total.toLocaleString("es-MX")} tokens.`);
+    }
+
+    function applyAIImage() {
+        if (!aiImageResult) return;
+        if (objects.length >= 100) {
+            setAIMessage("La diapositiva ya tiene 100 objetos.", true);
+            return;
+        }
+        addElement(aiImageResult.path);
+        setAIMessage("La imagen se agregó a la diapositiva y a tu biblioteca privada.");
     }
 
     function renderUploadedImages(images) {
@@ -908,7 +1676,10 @@
             const label = document.createElement("span");
             label.textContent = image.name;
             choice.append(preview, label);
-            choice.addEventListener("click", () => addElement(image.path));
+            choice.addEventListener("click", () => {
+                addElement(image.path);
+                closeAssetPanelOnCompactScreen();
+            });
             grid.append(choice);
         }
         $("uploaded-image-empty").hidden = images.length > 0;
@@ -947,6 +1718,8 @@
 
     async function uploadImages(files) {
         if (!files.length) return;
+        // Evita que una carga inicial pendiente reemplace la galería después de subir.
+        uploadedImagesRequest += 1;
         const gallery = document.querySelector('[data-gallery="imagenes"]');
         const status = $("image-upload-status");
         const data = new FormData();
@@ -969,11 +1742,867 @@
         }
     }
 
+    let uploadedAudiosRequest = 0;
+    let uploadedAudiosCache = [];
+
+    function mergeUploadedAudios(audios) {
+        const merged = new Map();
+        for (const audio of [...audios, ...uploadedAudiosCache]) merged.set(audio.path, audio);
+        uploadedAudiosCache = [...merged.values()];
+        return uploadedAudiosCache;
+    }
+
+    function updateSelectedAudio() {
+        const selectedTrack = activeAudios.find(track => track.id === selectedAudioTrackId);
+        const selectedAudio = uploadedAudiosCache.find(audio => audio.path === selectedTrack?.path);
+        const preview = $("selected-audio-preview");
+        $("selected-audio-name").textContent = selectedTrack
+            ? selectedAudio?.name || selectedTrack.path.split("/").at(-1)
+            : "Sin pista seleccionada";
+        $("clear-audio").disabled = !selectedTrack;
+        if (selectedTrack) {
+            preview.src = selectedAudio?.url || audioUrl(selectedTrack.path);
+            preview.hidden = false;
+        } else {
+            preview.pause();
+            preview.removeAttribute("src");
+            preview.load();
+            preview.hidden = true;
+        }
+        document.querySelectorAll("[data-audio-path]").forEach(button => {
+            button.setAttribute("aria-pressed", String(activeAudios.some(track => track.path === button.dataset.audioPath)));
+        });
+    }
+
+    function hydrateAudioTrack(track) {
+        const probe = new Audio(audioUrl(track.path));
+        probe.preload = "metadata";
+        probe.addEventListener("loadedmetadata", () => {
+            const duration = clamp(probe.duration || 0, 0, 3600);
+            if (track.recorte_fin === null) track.recorte_fin = duration;
+            extendDurationTo(track.inicio_frame + Math.max(0, track.recorte_fin - track.recorte_inicio) * FPS);
+            renderAudioMixer();
+            renderTimeline();
+            sync();
+        }, {once: true});
+    }
+
+    function selectAudio(path) {
+        let track = activeAudios.find(item => item.path === path);
+        if (!track) {
+            if (activeAudios.length >= 3) {
+                $("audio-upload-status").textContent = "Cada diapositiva admite un máximo de 3 pistas.";
+                return;
+            }
+            track = {
+                id: crypto.randomUUID(), path, inicio_frame: currentFrame,
+                recorte_inicio: 0, recorte_fin: null, volumen: 1, silenciado: false,
+                fundido_entrada: 0, fundido_salida: 0,
+            };
+            activeAudios.push(track);
+            hydrateAudioTrack(track);
+        }
+        selectedAudioTrackId = track.id;
+        slides[activeSlideIndex].audios = activeAudios;
+        slides[activeSlideIndex].audio = activeAudios[0]?.path || "";
+        updateSelectedAudio();
+        renderAudioMixer();
+        renderSlideList();
+        sync();
+    }
+
+    function removeSelectedAudioTrack() {
+        if (!selectedAudioTrackId) return;
+        stopAudioPlayers();
+        activeAudios = activeAudios.filter(track => track.id !== selectedAudioTrackId);
+        selectedAudioTrackId = activeAudios[0]?.id || null;
+        slides[activeSlideIndex].audios = activeAudios;
+        slides[activeSlideIndex].audio = activeAudios[0]?.path || "";
+        updateSelectedAudio();
+        renderAudioMixer();
+        renderSlideList();
+        sync();
+    }
+
+    function renderUploadedAudios(audios) {
+        const list = $("uploaded-audio-list");
+        list.replaceChildren();
+        for (const audio of audios) {
+            const item = document.createElement("article");
+            item.className = "audio-item";
+            const name = document.createElement("strong");
+            name.textContent = audio.name;
+            const player = document.createElement("audio");
+            player.controls = true;
+            player.preload = "metadata";
+            player.src = audio.url;
+            player.setAttribute("aria-label", `Escuchar ${audio.name}`);
+            player.addEventListener("play", () => {
+                document.querySelectorAll(".audio-item audio, #selected-audio-preview").forEach(other => {
+                    if (other !== player) other.pause();
+                });
+            });
+            const selectButton = document.createElement("button");
+            selectButton.type = "button";
+            selectButton.className = "audio-select";
+            selectButton.dataset.audioPath = audio.path;
+            selectButton.textContent = "Agregar o seleccionar pista";
+            selectButton.addEventListener("click", () => selectAudio(audio.path));
+            item.append(name, player, selectButton);
+            list.append(item);
+        }
+        $("uploaded-audio-empty").hidden = audios.length > 0;
+        updateSelectedAudio();
+    }
+
+    async function loadUploadedAudios() {
+        const gallery = document.querySelector('[data-gallery="audios"]');
+        const status = $("audio-upload-status");
+        const requestId = ++uploadedAudiosRequest;
+        try {
+            const response = await fetch(gallery.dataset.audiosUrl, {
+                credentials: "same-origin",
+                cache: "no-store",
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudieron cargar tus audios.");
+            if (requestId !== uploadedAudiosRequest) return null;
+            renderUploadedAudios(mergeUploadedAudios(result.audios));
+            status.textContent = "";
+            return true;
+        } catch (error) {
+            if (requestId !== uploadedAudiosRequest) return null;
+            status.textContent = error.message || "No se pudieron cargar tus audios.";
+            return false;
+        }
+    }
+
+    async function uploadAudios(files) {
+        if (!files.length) return;
+        const gallery = document.querySelector('[data-gallery="audios"]');
+        const status = $("audio-upload-status");
+        const data = new FormData();
+        for (const file of files) data.append("audios", file);
+        data.append("csrfmiddlewaretoken", form.elements.csrfmiddlewaretoken.value);
+        status.textContent = "Subiendo audios...";
+        try {
+            const response = await fetch(gallery.dataset.uploadUrl, {
+                method: "POST",
+                body: data,
+                headers: {"X-Requested-With": "XMLHttpRequest"},
+                credentials: "same-origin",
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudieron subir los audios.");
+            renderUploadedAudios(mergeUploadedAudios(result.audios));
+            status.textContent = `${result.audios.length} audio${result.audios.length === 1 ? "" : "s"} guardado${result.audios.length === 1 ? "" : "s"}.`;
+        } catch (error) {
+            status.textContent = error.message || "No se pudieron subir los audios.";
+        }
+    }
+
+    let audioContext = null;
+
+    async function drawWaveform(canvas, track) {
+        try {
+            if (!audioBuffers.has(track.path)) {
+                const response = await fetch(audioUrl(track.path), {credentials: "same-origin"});
+                const bytes = await response.arrayBuffer();
+                audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+                audioBuffers.set(track.path, await audioContext.decodeAudioData(bytes.slice(0)));
+            }
+            const buffer = audioBuffers.get(track.path);
+            if (track.recorte_fin === null) {
+                track.recorte_fin = Math.min(buffer.duration, 3600);
+                extendDurationTo(track.inicio_frame + (track.recorte_fin - track.recorte_inicio) * FPS);
+                sync();
+            }
+            const width = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
+            const height = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext("2d");
+            context.clearRect(0, 0, width, height);
+            context.strokeStyle = "#2563eb";
+            context.lineWidth = Math.max(1, devicePixelRatio);
+            context.beginPath();
+            const channel = buffer.getChannelData(0);
+            const step = Math.max(1, Math.floor(channel.length / width));
+            for (let x = 0; x < width; x++) {
+                let min = 1, max = -1;
+                for (let sample = x * step; sample < Math.min(channel.length, (x + 1) * step); sample++) {
+                    min = Math.min(min, channel[sample]);
+                    max = Math.max(max, channel[sample]);
+                }
+                context.moveTo(x, (1 + min) * height / 2);
+                context.lineTo(x, (1 + max) * height / 2);
+            }
+            context.stroke();
+        } catch (error) {
+            canvas.setAttribute("aria-label", "No se pudo generar la forma de onda");
+        }
+    }
+
+    function updateAudioTrack(track, field, rawValue) {
+        if (field === "silenciado") track[field] = Boolean(rawValue);
+        else if (field === "inicio_frame") track[field] = clamp(Math.round(Number(rawValue) * FPS), 0, MAX_SLIDE_FRAMES);
+        else if (field === "volumen") track[field] = clamp(Number(rawValue), 0, 1);
+        else if (field === "recorte_fin") track[field] = rawValue === "" ? null : clamp(Number(rawValue), track.recorte_inicio + .01, 3600);
+        else track[field] = clamp(Number(rawValue), 0, 3600);
+        const end = track.inicio_frame + Math.max(0, (track.recorte_fin ?? track.recorte_inicio) - track.recorte_inicio) * FPS;
+        extendDurationTo(end);
+        renderAudioMixer();
+        renderTimeline();
+        sync();
+    }
+
+    function renderAudioMixer() {
+        const container = $("audio-waveform-tracks");
+        container.replaceChildren();
+        for (const track of activeAudios) {
+            const row = document.createElement("article");
+            row.className = "audio-wave-track";
+            const name = document.createElement("button");
+            name.type = "button";
+            name.className = "audio-track-name";
+            name.textContent = uploadedAudiosCache.find(audio => audio.path === track.path)?.name || track.path.split("/").at(-1);
+            name.setAttribute("aria-pressed", String(track.id === selectedAudioTrackId));
+            name.addEventListener("click", () => {
+                selectedAudioTrackId = track.id;
+                updateSelectedAudio();
+                renderAudioMixer();
+            });
+            const canvas = document.createElement("canvas");
+            canvas.setAttribute("aria-label", `Forma de onda de ${name.textContent}`);
+            const controls = document.createElement("div");
+            controls.className = "audio-track-controls";
+            const definitions = [
+                ["inicio_frame", "Inicio (s)", track.inicio_frame / FPS, "0.1"],
+                ["recorte_inicio", "Recorte inicial", track.recorte_inicio, "0.1"],
+                ["recorte_fin", "Recorte final", track.recorte_fin ?? "", "0.1"],
+                ["volumen", "Volumen", track.volumen, "0.05"],
+                ["fundido_entrada", "Fundido entrada", track.fundido_entrada, "0.1"],
+                ["fundido_salida", "Fundido salida", track.fundido_salida, "0.1"],
+            ];
+            for (const [field, labelText, value, step] of definitions) {
+                const label = document.createElement("label");
+                label.textContent = labelText;
+                const input = document.createElement("input");
+                input.type = "number";
+                input.min = "0";
+                input.step = step;
+                input.value = value;
+                input.addEventListener("change", () => updateAudioTrack(track, field, input.value));
+                label.append(input);
+                controls.append(label);
+            }
+            const mute = document.createElement("label");
+            mute.textContent = "Silencio";
+            const muteInput = document.createElement("input");
+            muteInput.type = "checkbox";
+            muteInput.checked = track.silenciado;
+            muteInput.addEventListener("change", () => updateAudioTrack(track, "silenciado", muteInput.checked));
+            mute.append(muteInput);
+            controls.append(mute);
+            row.append(name, canvas, controls);
+            container.append(row);
+            drawWaveform(canvas, track);
+        }
+        if (!activeAudios.length) {
+            const empty = document.createElement("p");
+            empty.className = "asset-empty";
+            empty.textContent = "Agrega pistas desde el apartado Audio.";
+            container.append(empty);
+        }
+    }
+
+    function audioVolumeAt(track, localTime) {
+        const duration = Math.max(0, (track.recorte_fin ?? track.recorte_inicio) - track.recorte_inicio);
+        let volume = track.silenciado ? 0 : track.volumen;
+        if (track.fundido_entrada > 0) volume *= clamp(localTime / track.fundido_entrada, 0, 1);
+        if (track.fundido_salida > 0) volume *= clamp((duration - localTime) / track.fundido_salida, 0, 1);
+        return clamp(volume, 0, 1);
+    }
+
+    function syncAudioPlayers(frame, shouldPlay) {
+        const activeIds = new Set(activeAudios.map(track => track.id));
+        for (const [id, player] of audioPlayers) {
+            if (!activeIds.has(id)) {
+                player.pause();
+                audioPlayers.delete(id);
+            }
+        }
+        for (const track of activeAudios) {
+            let player = audioPlayers.get(track.id);
+            if (!player) {
+                player = new Audio(audioUrl(track.path));
+                player.preload = "auto";
+                audioPlayers.set(track.id, player);
+            }
+            const localTime = frame / FPS - track.inicio_frame / FPS;
+            const duration = Math.max(0, (track.recorte_fin ?? Infinity) - track.recorte_inicio);
+            if (localTime < 0 || localTime >= duration) {
+                player.pause();
+                continue;
+            }
+            const desiredTime = track.recorte_inicio + localTime;
+            if (Number.isFinite(player.duration) && Math.abs(player.currentTime - desiredTime) > .3) {
+                player.currentTime = clamp(desiredTime, 0, player.duration || desiredTime);
+            }
+            player.volume = audioVolumeAt(track, localTime);
+            if (shouldPlay && player.paused) player.play().catch(() => player.pause());
+            if (!shouldPlay && !player.paused) player.pause();
+        }
+    }
+
+    function stopAudioPlayers() {
+        for (const player of audioPlayers.values()) {
+            player.pause();
+            player.currentTime = 0;
+        }
+    }
+
+    const keyframeId = (objectId, frame) => `${objectId}:${frame}`;
+
+    function selectedKeyframeData() {
+        const selectedData = [];
+        for (const obj of objects) {
+            for (const key of obj.fotogramas) {
+                if (selectedKeyframes.has(keyframeId(obj.id, key.frame))) selectedData.push({obj, key});
+            }
+        }
+        return selectedData;
+    }
+
+    function updateKeyframeInspector() {
+        const items = selectedKeyframeData();
+        const fields = $("keyframe-fields");
+        fields.disabled = !items.length;
+        $("keyframe-empty").hidden = Boolean(items.length);
+        if (!items.length) return;
+        $("keyframe-inspector-panel").open = true;
+        const key = items[0].key;
+        $("keyframe-frame").value = key.frame;
+        $("keyframe-x").value = Math.round(key.x * 100) / 100;
+        $("keyframe-y").value = Math.round(key.y * 100) / 100;
+        $("keyframe-width").value = Math.round(key.ancho * 100) / 100;
+        $("keyframe-height").value = Math.round(key.alto * 100) / 100;
+        $("keyframe-rotation").value = Math.round(key.giro * 100) / 100;
+        $("keyframe-opacity").value = Math.round(key.opacidad * 100) / 100;
+        $("keyframe-color").value = key.color;
+        $("keyframe-font-size").value = Math.round(key.tamano * 100) / 100;
+        $("keyframe-font-family").value = key.fuente;
+        $("keyframe-text").value = key.texto;
+        $("keyframe-easing").value = key.interpolacion;
+        $("keyframe-text-mode").value = key.texto_modo;
+        const bezier = key.bezier || [.25, .1, .25, 1];
+        ["bezier-x1", "bezier-y1", "bezier-x2", "bezier-y2"].forEach((id, index) => {
+            $(id).value = bezier[index];
+        });
+        $("bezier-fields").hidden = key.interpolacion !== "bezier";
+    }
+
+    function timelineLane(labelText, className = "") {
+        const row = document.createElement("div");
+        row.className = `timeline-track ${className}`.trim();
+        const label = document.createElement("div");
+        label.className = "timeline-track-label";
+        label.title = labelText;
+        const labelName = document.createElement("span");
+        labelName.className = "timeline-track-name";
+        labelName.textContent = labelText;
+        label.append(labelName);
+        const lane = document.createElement("div");
+        lane.className = "timeline-track-lane";
+        lane.style.width = `${Math.max(540, slides[activeSlideIndex].duracion_frames / FPS * timelinePixelsPerSecond)}px`;
+        lane.addEventListener("pointerdown", event => {
+            if (event.target !== lane) return;
+            const bounds = lane.getBoundingClientRect();
+            setTimelineFrame((event.clientX - bounds.left) / timelinePixelsPerSecond * FPS);
+        });
+        row.append(label, lane);
+        return {row, label, lane};
+    }
+
+    function makeKeyframeButton(obj, key, property = "") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "timeline-keyframe";
+        button.style.left = `${key.frame / FPS * timelinePixelsPerSecond}px`;
+        button.title = `${property ? `${property}: ` : ""}fotograma ${key.frame}`;
+        button.setAttribute("aria-label", button.title);
+        const id = keyframeId(obj.id, key.frame);
+        button.classList.toggle("selected", selectedKeyframes.has(id));
+        button.addEventListener("pointerdown", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                if (selectedKeyframes.has(id)) selectedKeyframes.delete(id);
+                else selectedKeyframes.add(id);
+            } else if (!selectedKeyframes.has(id)) {
+                selectedKeyframes.clear();
+                selectedKeyframes.add(id);
+            }
+            setTimelineFrame(key.frame, false);
+            const initial = selectedKeyframeData().map(item => ({
+                obj: item.obj,
+                key: item.key,
+                frame: item.key.frame,
+                id: keyframeId(item.obj.id, item.key.frame),
+            }));
+            const startX = event.clientX;
+            const move = moveEvent => {
+                const requestedDelta = Math.round((moveEvent.clientX - startX) / timelinePixelsPerSecond * FPS);
+                const minimum = Math.min(...initial.map(item => item.frame));
+                const maximum = Math.max(...initial.map(item => item.frame));
+                const delta = clamp(requestedDelta, -minimum, MAX_SLIDE_FRAMES - maximum);
+                const movingByObject = new Map();
+                initial.forEach(item => {
+                    if (!movingByObject.has(item.obj.id)) movingByObject.set(item.obj.id, []);
+                    movingByObject.get(item.obj.id).push(item);
+                });
+                const collision = [...movingByObject.values()].some(group => {
+                    const movingKeys = new Set(group.map(item => item.key));
+                    const occupied = new Set(group[0].obj.fotogramas.filter(item => !movingKeys.has(item)).map(item => item.frame));
+                    return group.some(item => occupied.has(item.frame + delta));
+                });
+                if (collision) return;
+                selectedKeyframes.clear();
+                initial.forEach(item => {
+                    item.key.frame = item.frame + delta;
+                    selectedKeyframes.add(keyframeId(item.obj.id, item.key.frame));
+                });
+                const target = clamp(key.frame, 0, MAX_SLIDE_FRAMES);
+                extendDurationTo(target);
+                setTimelineFrame(target, false);
+                renderTimeline();
+            };
+            const up = () => {
+                window.removeEventListener("pointermove", move);
+                window.removeEventListener("pointerup", up);
+                objects.forEach(item => item.fotogramas.sort((left, right) => left.frame - right.frame));
+                sync();
+                commitHistory();
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up, {once: true});
+            renderTimeline();
+        });
+        return button;
+    }
+
+    function renderTimeline() {
+        if ($("timeline-panel").hidden) return;
+        const slide = slides[activeSlideIndex];
+        const expandedPropertyCount = objects.reduce((total, obj) => total + (
+            expandedObjects.has(obj.id)
+                ? animatedProperties.filter(property => obj.tipo !== "imagen" || !["color", "tamano", "texto"].includes(property)).length
+                : 0
+        ), 0);
+        const panel = $("timeline-panel");
+        panel.style.height = `${Math.min(268, Math.max(190, 158 + Math.min(objects.length + expandedPropertyCount, 4) * 22))}px`;
+        panel.style.setProperty("--timeline-second", `${timelinePixelsPerSecond}px`);
+        panel.style.setProperty("--timeline-half-second", `${timelinePixelsPerSecond / 2}px`);
+        const durationWidth = Math.max(540, slide.duracion_frames / FPS * timelinePixelsPerSecond);
+        const ruler = $("timeline-ruler");
+        ruler.replaceChildren();
+        ruler.style.width = `${150 + durationWidth}px`;
+        const corner = document.createElement("span");
+        corner.className = "timeline-ruler-corner";
+        corner.textContent = "Pistas";
+        ruler.append(corner);
+        const seconds = Math.ceil(slide.duracion_frames / FPS);
+        const tickEvery = timelinePixelsPerSecond < 70 ? 2 : 1;
+        for (let second = 0; second <= seconds; second += tickEvery) {
+            const tick = document.createElement("span");
+            tick.className = "timeline-tick";
+            tick.style.left = `${150 + second * timelinePixelsPerSecond}px`;
+            tick.textContent = second < 60
+                ? `${second}s`
+                : `${Math.floor(second / 60)}:${String(second % 60).padStart(2, "0")}`;
+            ruler.append(tick);
+        }
+        ruler.onclick = event => {
+            const bounds = ruler.getBoundingClientRect();
+            setTimelineFrame((event.clientX - bounds.left - 150) / timelinePixelsPerSecond * FPS);
+        };
+        const tracks = $("timeline-tracks");
+        tracks.replaceChildren();
+        const markerRow = timelineLane("Pausas por clic", "marker-track");
+        for (const marker of slide.marcadores) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "timeline-marker";
+            button.style.left = `${marker.frame / FPS * timelinePixelsPerSecond}px`;
+            const target = objects.find(obj => obj.id === marker.objeto_id);
+            button.textContent = "C";
+            button.title = `Pausa en F${marker.frame}; continúa al pulsar ${target ? objectLabel(target) : "el objeto"}. Doble clic para eliminar.`;
+            button.addEventListener("click", event => {
+                event.stopPropagation();
+                setTimelineFrame(marker.frame);
+                select(marker.objeto_id);
+            });
+            button.addEventListener("dblclick", event => {
+                event.stopPropagation();
+                slide.marcadores = slide.marcadores.filter(item => item.id !== marker.id);
+                renderTimeline();
+                sync();
+            });
+            markerRow.lane.append(button);
+        }
+        tracks.append(markerRow.row);
+        for (const obj of objects) {
+            const main = timelineLane(objectLabel(obj));
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "track-expand";
+            toggle.textContent = expandedObjects.has(obj.id) ? "▾" : "▸";
+            toggle.setAttribute("aria-label", `${expandedObjects.has(obj.id) ? "Contraer" : "Expandir"} propiedades`);
+            toggle.addEventListener("click", () => {
+                if (expandedObjects.has(obj.id)) expandedObjects.delete(obj.id);
+                else expandedObjects.add(obj.id);
+                renderTimeline();
+            });
+            main.label.prepend(toggle);
+            main.label.addEventListener("click", () => select(obj.id));
+            obj.fotogramas.forEach(key => main.lane.append(makeKeyframeButton(obj, key)));
+            tracks.append(main.row);
+            if (expandedObjects.has(obj.id)) {
+                for (const property of animatedProperties) {
+                    if (obj.tipo === "imagen" && ["color", "tamano", "texto"].includes(property)) continue;
+                    const sub = timelineLane(`↳ ${property}`, "property-track");
+                    obj.fotogramas.forEach(key => sub.lane.append(makeKeyframeButton(obj, key, property)));
+                    tracks.append(sub.row);
+                }
+            }
+        }
+        $("loop-start").max = slide.duracion_frames;
+        $("loop-end").max = slide.duracion_frames;
+        $("loop-start").value = loopStart;
+        $("loop-end").value = loopEnd;
+        updateKeyframeInspector();
+        updateTimelinePosition();
+    }
+
+    function updateSelectedKeyframes(field, rawValue) {
+        const items = selectedKeyframeData();
+        if (!items.length) return;
+        if (field === "frame") {
+            const firstFrame = items[0].key.frame;
+            const desired = clamp(Math.round(Number(rawValue)), 0, MAX_SLIDE_FRAMES);
+            const delta = desired - firstFrame;
+            const movingKeys = new Set(items.map(item => item.key));
+            const collision = items.some(({obj, key}) => obj.fotogramas.some(other =>
+                !movingKeys.has(other) && other.frame === key.frame + delta
+            ));
+            if (collision || items.some(item => item.key.frame + delta < 0 || item.key.frame + delta > MAX_SLIDE_FRAMES)) {
+                updateKeyframeInspector();
+                return;
+            }
+            selectedKeyframes.clear();
+            items.forEach(({obj, key}) => {
+                key.frame += delta;
+                selectedKeyframes.add(keyframeId(obj.id, key.frame));
+                obj.fotogramas.sort((left, right) => left.frame - right.frame);
+            });
+            extendDurationTo(Math.max(...items.map(item => item.key.frame)));
+            setTimelineFrame(desired, false);
+        } else {
+            const numericLimits = {
+                x: [MIN_OBJECT_POSITION, MAX_OBJECT_POSITION], y: [MIN_OBJECT_POSITION, MAX_OBJECT_POSITION],
+                ancho: [MIN_OBJECT_WIDTH, MAX_OBJECT_WIDTH], alto: [MIN_OBJECT_HEIGHT, MAX_OBJECT_HEIGHT],
+                giro: [-360, 360], opacidad: [0, 1], tamano: [8, 120],
+            };
+            items.forEach(({key}) => {
+                if (numericLimits[field]) key[field] = clamp(Number(rawValue), ...numericLimits[field]);
+                else key[field] = rawValue;
+                if (field === "interpolacion") {
+                    if (rawValue === "bezier") key.bezier ||= [.25, .1, .25, 1];
+                    else delete key.bezier;
+                }
+            });
+        }
+        renderTimeline();
+        setTimelineFrame(currentFrame, false);
+        renderMotionPath();
+        sync();
+    }
+
+    function updateBezier(index, rawValue) {
+        for (const {key} of selectedKeyframeData()) {
+            key.interpolacion = "bezier";
+            key.bezier ||= [.25, .1, .25, 1];
+            key.bezier[index] = clamp(Number(rawValue), index % 2 === 0 ? 0 : -2, index % 2 === 0 ? 1 : 2);
+        }
+        renderTimeline();
+        sync();
+    }
+
+    function addClickMarker() {
+        const obj = current();
+        if (!obj) {
+            $("animation-status").textContent = "Selecciona el objeto que reanudará la reproducción.";
+            return;
+        }
+        const slide = slides[activeSlideIndex];
+        const existing = slide.marcadores.find(marker => marker.frame === currentFrame && marker.objeto_id === obj.id);
+        if (!existing) slide.marcadores.push({id: crypto.randomUUID(), frame: currentFrame, objeto_id: obj.id});
+        slide.marcadores.sort((left, right) => left.frame - right.frame);
+        renderTimeline();
+        sync();
+    }
+
+    function pauseTimeline() {
+        timelineRunning = false;
+        cancelAnimationFrame(playbackRequest);
+        playbackRequest = null;
+        syncAudioPlayers(currentFrame, false);
+        $("timeline-play").innerHTML = '<i class="fa-solid fa-play" aria-hidden="true"></i>';
+        $("timeline-play").setAttribute("aria-label", "Reproducir");
+        $("timeline-play").title = "Reproducir";
+    }
+
+    function playbackTick(now) {
+        if (!timelineRunning) return;
+        const slide = slides[activeSlideIndex];
+        const previousFrame = currentFrame;
+        let nextFrame = playbackStartFrame + (now - playbackStartedAt) / 1000 * FPS;
+        if (playing) {
+            const marker = slide.marcadores.find(item =>
+                !consumedMarkers.has(item.id) && item.frame >= previousFrame && item.frame <= nextFrame
+            );
+            if (marker) {
+                consumedMarkers.add(marker.id);
+                waitingMarker = marker;
+                setTimelineFrame(marker.frame, false);
+                pauseTimeline();
+                node(marker.objeto_id)?.classList.add("click-wait-target");
+                return;
+            }
+        }
+        const end = loopEnabled && !playing ? loopEnd : slide.duracion_frames;
+        if (nextFrame >= end) {
+            if (loopEnabled && !playing) {
+                nextFrame = loopStart;
+                setTimelineFrame(nextFrame, false);
+                playbackStartFrame = nextFrame;
+                playbackStartedAt = now;
+                syncAudioPlayers(nextFrame, true);
+                playbackRequest = requestAnimationFrame(playbackTick);
+                return;
+            }
+            setTimelineFrame(end, false);
+            pauseTimeline();
+            if (playing) showPresentationSlide(activeSlideIndex + 1);
+            return;
+        }
+        setTimelineFrame(nextFrame, false);
+        syncAudioPlayers(currentFrame, true);
+        playbackRequest = requestAnimationFrame(playbackTick);
+    }
+
+    function startTimeline() {
+        if (timelineRunning) {
+            pauseTimeline();
+            return;
+        }
+        const slide = slides[activeSlideIndex];
+        const end = loopEnabled && !playing ? loopEnd : slide.duracion_frames;
+        if (currentFrame >= end) setTimelineFrame(loopEnabled && !playing ? loopStart : 0, false);
+        waitingMarker = null;
+        playbackStartFrame = currentFrame;
+        playbackStartedAt = performance.now();
+        timelineRunning = true;
+        $("timeline-play").innerHTML = '<i class="fa-solid fa-pause" aria-hidden="true"></i>';
+        $("timeline-play").setAttribute("aria-label", "Pausar");
+        $("timeline-play").title = "Pausar";
+        syncAudioPlayers(currentFrame, true);
+        playbackRequest = requestAnimationFrame(playbackTick);
+    }
+
+    function resumeAfterMarker() {
+        if (!waitingMarker) return;
+        node(waitingMarker.objeto_id)?.classList.remove("click-wait-target");
+        waitingMarker = null;
+        startTimeline();
+    }
+
+    function presetFrames(obj, preset, startFrame) {
+        const pose = keyframeSnapshot(obj, startFrame);
+        const endFrame = clamp(startFrame + 21, 0, MAX_SLIDE_FRAMES);
+        const middleFrame = clamp(startFrame + 10, 0, MAX_SLIDE_FRAMES);
+        const clone = (frame, changes = {}, easing = "suave") => ({
+            ...pose, frame, ...changes, interpolacion: easing,
+        });
+        if (preset === "aparecer") return [clone(startFrame, {opacidad: 0}), clone(endFrame, {opacidad: pose.opacidad})];
+        if (preset === "subir") return [clone(startFrame, {y: pose.y + 40, opacidad: 0}), clone(endFrame)];
+        if (preset === "zoom") return [clone(startFrame, {ancho: Math.max(60, pose.ancho * .65), alto: Math.max(30, pose.alto * .65), opacidad: 0}), clone(endFrame)];
+        if (preset === "girar") return [clone(startFrame, {giro: clamp(pose.giro - 90, -360, 360), opacidad: 0}), clone(endFrame)];
+        if (preset === "rebote") return [clone(startFrame, {y: pose.y - 50}, "rebote"), clone(endFrame)];
+        if (preset === "pulso") return [clone(startFrame), clone(middleFrame, {ancho: pose.ancho * 1.12, alto: pose.alto * 1.12}), clone(endFrame)];
+        if (preset === "desaparecer") return [clone(startFrame), clone(endFrame, {opacidad: 0})];
+        if (preset === "salir-arriba") return [clone(startFrame), clone(endFrame, {y: pose.y - 80, opacidad: 0})];
+        return [];
+    }
+
+    function mergePreset(obj, frames, targetSlide = slides[activeSlideIndex]) {
+        const incomingFrames = new Set(frames.map(key => key.frame));
+        obj.fotogramas = obj.fotogramas.filter(key => !incomingFrames.has(key.frame)).concat(frames);
+        obj.fotogramas.sort((left, right) => left.frame - right.frame);
+        const lastFrame = obj.fotogramas.at(-1).frame;
+        targetSlide.duracion_frames = clamp(Math.max(targetSlide.duracion_frames, lastFrame), 30, MAX_SLIDE_FRAMES);
+        if (targetSlide === slides[activeSlideIndex]) extendDurationTo(lastFrame);
+    }
+
+    function applyPresetForScope(preset) {
+        const scope = $("animation-scope").value;
+        let targets = [];
+        if (scope === "objeto") {
+            if (!current()) {
+                $("animation-status").textContent = "Selecciona un objeto o cambia el alcance.";
+                return;
+            }
+            targets = [{slide: slides[activeSlideIndex], obj: current()}];
+        } else if (scope === "diapositiva") {
+            targets = objects.map(obj => ({slide: slides[activeSlideIndex], obj}));
+        } else {
+            targets = slides.flatMap(slide => slide.objetos.map(obj => ({slide, obj})));
+        }
+        for (const target of targets) {
+            const frame = target.slide === slides[activeSlideIndex] ? currentFrame : 0;
+            const oldObjects = objects;
+            if (target.slide !== slides[activeSlideIndex]) objects = target.slide.objetos;
+            if (preset === "ninguna") {
+                target.obj.fotogramas = [keyframeSnapshot(target.obj, 0)];
+            } else {
+                mergePreset(target.obj, presetFrames(target.obj, preset, frame), target.slide);
+            }
+            objects = oldObjects;
+            target.obj.animacion = preset;
+        }
+        $("animation-status").textContent = `Preajuste aplicado a ${targets.length} objeto${targets.length === 1 ? "" : "s"}; sus fotogramas siguen siendo editables.`;
+        updateAnimationPanel();
+        setTimelineFrame(currentFrame, false);
+        renderTimeline();
+        renderMotionPath();
+        renderSlideList();
+        sync();
+    }
+
+    let animationTemplates = [];
+
+    function renderAnimationTemplates() {
+        const list = $("animation-template-list");
+        list.replaceChildren();
+        if (!animationTemplates.length) {
+            list.textContent = "Todavía no hay plantillas privadas.";
+            return;
+        }
+        for (const template of animationTemplates) {
+            const wrapper = document.createElement("span");
+            wrapper.className = "template-item";
+            const apply = document.createElement("button");
+            apply.type = "button";
+            apply.textContent = template.name;
+            apply.title = "Aplicar al objeto seleccionado";
+            apply.addEventListener("click", () => {
+                const obj = current();
+                if (!obj) {
+                    $("animation-template-status").textContent = "Selecciona un objeto antes de aplicar la plantilla.";
+                    return;
+                }
+                const source = template.data.fotogramas;
+                const offset = currentFrame - source[0].frame;
+                const frames = source.map(key => ({...key, frame: clamp(key.frame + offset, 0, MAX_SLIDE_FRAMES)}));
+                mergePreset(obj, frames);
+                renderTimeline();
+                renderMotionPath();
+                sync();
+                $("animation-template-status").textContent = `Plantilla “${template.name}” aplicada.`;
+            });
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "delete-template";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", `Eliminar plantilla ${template.name}`);
+            remove.addEventListener("click", () => deleteAnimationTemplate(template));
+            wrapper.append(apply, remove);
+            list.append(wrapper);
+        }
+    }
+
+    async function loadAnimationTemplates() {
+        try {
+            const response = await fetch($("timeline-panel").dataset.templatesUrl, {credentials: "same-origin"});
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudieron cargar las plantillas.");
+            animationTemplates = result.templates;
+            renderAnimationTemplates();
+        } catch (error) {
+            $("animation-template-status").textContent = error.message;
+        }
+    }
+
+    async function saveAnimationTemplate() {
+        const obj = current();
+        const name = $("animation-template-name").value.trim();
+        if (!obj || !name) {
+            $("animation-template-status").textContent = "Selecciona un objeto y escribe un nombre.";
+            return;
+        }
+        const chosen = selectedKeyframeData().filter(item => item.obj.id === obj.id).map(item => item.key);
+        const source = chosen.length ? chosen.sort((a, b) => a.frame - b.frame) : obj.fotogramas;
+        const first = source[0].frame;
+        const data = {fotogramas: source.map(key => ({...key, frame: key.frame - first}))};
+        const body = new FormData();
+        body.append("csrfmiddlewaretoken", form.elements.csrfmiddlewaretoken.value);
+        body.append("nombre", name);
+        body.append("datos", JSON.stringify(data));
+        try {
+            const response = await fetch($("timeline-panel").dataset.saveTemplateUrl, {method: "POST", body, credentials: "same-origin"});
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudo guardar la plantilla.");
+            const index = animationTemplates.findIndex(item => item.id === result.template.id);
+            if (index >= 0) animationTemplates[index] = result.template;
+            else animationTemplates.push(result.template);
+            renderAnimationTemplates();
+            $("animation-template-status").textContent = "Plantilla privada guardada.";
+        } catch (error) {
+            $("animation-template-status").textContent = error.message;
+        }
+    }
+
+    async function deleteAnimationTemplate(template) {
+        const body = new FormData();
+        body.append("csrfmiddlewaretoken", form.elements.csrfmiddlewaretoken.value);
+        const url = $("timeline-panel").dataset.deleteTemplatePattern.replace("999999", String(template.id));
+        try {
+            const response = await fetch(url, {method: "POST", body, credentials: "same-origin"});
+            if (!response.ok) throw new Error("No se pudo eliminar la plantilla.");
+            animationTemplates = animationTemplates.filter(item => item.id !== template.id);
+            renderAnimationTemplates();
+            $("animation-template-status").textContent = "Plantilla eliminada.";
+        } catch (error) {
+            $("animation-template-status").textContent = error.message;
+        }
+    }
+
     $("upload-image-trigger").addEventListener("click", () => $("image-file-input").click());
     $("image-drop-zone").addEventListener("click", () => $("image-file-input").click());
     $("image-file-input").addEventListener("change", event => {
         uploadImages([...event.target.files]);
         event.target.value = "";
+    });
+    $("upload-audio-trigger").addEventListener("click", () => $("audio-file-input").click());
+    $("audio-file-input").addEventListener("change", event => {
+        uploadAudios([...event.target.files]);
+        event.target.value = "";
+    });
+    $("clear-audio").addEventListener("click", removeSelectedAudioTrack);
+    $("selected-audio-preview").addEventListener("play", event => {
+        document.querySelectorAll(".audio-item audio").forEach(audio => {
+            if (audio !== event.currentTarget) audio.pause();
+        });
     });
     const dropZone = $("image-drop-zone");
     for (const eventName of ["dragenter", "dragover"]) {
@@ -1031,11 +2660,93 @@
     $("undo-action").addEventListener("click", undo);
     $("redo-action").addEventListener("click", redo);
     $("slide-duration").addEventListener("change", () => {
-        $("slide-duration").value = String(clamp(Number($("slide-duration").value) || 10, 1, 120));
-        slides[activeSlideIndex].duracion_frames = Number($("slide-duration").value) * 30;
+        $("slide-duration").value = String(clamp(Number($("slide-duration").value) || 10, 1, 3600));
+        slides[activeSlideIndex].duracion_frames = Math.round(Number($("slide-duration").value) * FPS);
+        loopEnd = Math.min(loopEnd, slides[activeSlideIndex].duracion_frames);
+        currentFrame = Math.min(currentFrame, slides[activeSlideIndex].duracion_frames);
         renderSlideList();
+        renderTimeline();
+        setTimelineFrame(currentFrame);
         sync();
     });
+
+    function setTimelineVisible(visible) {
+        document.body.classList.toggle("timeline-open", visible);
+        $("timeline-panel").hidden = !visible;
+        $("toggle-timeline").setAttribute("aria-expanded", String(visible));
+        $("toggle-timeline").setAttribute("aria-label", visible ? "Cerrar línea de tiempo" : "Abrir línea de tiempo");
+        if (visible) {
+            renderTimeline();
+            renderAudioMixer();
+            renderMotionPath();
+            loadAnimationTemplates();
+        } else {
+            renderMotionPath();
+        }
+    }
+
+    $("toggle-timeline").addEventListener("click", () => setTimelineVisible($("timeline-panel").hidden));
+    $("close-timeline").addEventListener("click", () => setTimelineVisible(false));
+    $("audio-mixer-panel").addEventListener("toggle", event => {
+        if (event.currentTarget.open) renderAudioMixer();
+    });
+    $("animation-template-panel").addEventListener("toggle", event => {
+        if (event.currentTarget.open) loadAnimationTemplates();
+    });
+    $("timeline-start").addEventListener("click", () => {
+        pauseTimeline();
+        setTimelineFrame(loopEnabled ? loopStart : 0);
+    });
+    $("timeline-play").addEventListener("click", startTimeline);
+    $("timeline-stop").addEventListener("click", () => {
+        pauseTimeline();
+        setTimelineFrame(0);
+    });
+    $("timeline-add-keyframe").addEventListener("click", () => addKeyframeForObject(current()));
+    $("timeline-add-marker").addEventListener("click", addClickMarker);
+    $("timeline-loop").addEventListener("click", () => {
+        loopEnabled = !loopEnabled;
+        $("timeline-loop").setAttribute("aria-pressed", String(loopEnabled));
+    });
+    $("timeline-zoom").addEventListener("input", event => {
+        timelinePixelsPerSecond = Number(event.target.value);
+        renderTimeline();
+    });
+    $("loop-start").addEventListener("change", event => {
+        loopStart = clamp(Math.round(Number(event.target.value)), 0, Math.max(0, loopEnd - 1));
+        renderTimeline();
+    });
+    $("loop-end").addEventListener("change", event => {
+        loopEnd = clamp(Math.round(Number(event.target.value)), loopStart + 1, slides[activeSlideIndex].duracion_frames);
+        renderTimeline();
+    });
+    const keyframeFieldMap = {
+        "keyframe-frame": "frame", "keyframe-x": "x", "keyframe-y": "y",
+        "keyframe-width": "ancho", "keyframe-height": "alto", "keyframe-rotation": "giro",
+        "keyframe-opacity": "opacidad", "keyframe-color": "color", "keyframe-font-size": "tamano",
+        "keyframe-font-family": "fuente", "keyframe-text": "texto",
+        "keyframe-easing": "interpolacion", "keyframe-text-mode": "texto_modo",
+    };
+    for (const [id, field] of Object.entries(keyframeFieldMap)) {
+        $(id).addEventListener("change", event => updateSelectedKeyframes(field, event.target.value));
+    }
+    ["bezier-x1", "bezier-y1", "bezier-x2", "bezier-y2"].forEach((id, index) => {
+        $(id).addEventListener("change", event => updateBezier(index, event.target.value));
+    });
+    $("delete-keyframes").addEventListener("click", () => {
+        const chosen = selectedKeyframeData();
+        const chosenKeys = new Set(chosen.map(item => item.key));
+        for (const obj of new Set(chosen.map(item => item.obj))) {
+            obj.fotogramas = obj.fotogramas.filter(key => !chosenKeys.has(key));
+            if (!obj.fotogramas.length) obj.fotogramas = [keyframeSnapshot(obj, 0)];
+        }
+        selectedKeyframes.clear();
+        renderTimeline();
+        renderMotionPath();
+        setTimelineFrame(currentFrame, false);
+        sync();
+    });
+    $("save-animation-template").addEventListener("click", saveAnimationTemplate);
 
     function playAnimations(targetObjects = objects) {
         previewAnimations.forEach(animation => animation.cancel());
@@ -1064,9 +2775,9 @@
     }
 
     function preview() {
-        $("animation-status").textContent = playAnimations()
-            ? "Reproduciendo la vista previa de la escena."
-            : "Elige un efecto para al menos un objeto.";
+        setTimelineFrame(0, false);
+        startTimeline();
+        $("animation-status").textContent = "Reproduciendo la línea de tiempo de la diapositiva.";
     }
 
     function animateForScope(preset) {
@@ -1095,6 +2806,7 @@
 
     function enterPresentation(index = activeSlideIndex) {
         if (playing) return;
+        document.querySelectorAll(".audio-item audio, #selected-audio-preview").forEach(audio => audio.pause());
         playing = true;
         document.body.classList.add("presenting");
         $("presentation-controls").hidden = false;
@@ -1106,27 +2818,35 @@
             exitPresentation();
             return;
         }
-        clearTimeout(playbackTimer);
+        pauseTimeline();
+        stopAudioPlayers();
         showSlide(index);
         $("presentation-count").textContent = `${index + 1} / ${slides.length}`;
-        playAnimations();
-        playbackTimer = setTimeout(
-            () => showPresentationSlide(index + 1),
-            slides[index].duracion_frames / 30 * 1000,
-        );
+        consumedMarkers = new Set();
+        waitingMarker = null;
+        setTimelineFrame(0, false);
+        startTimeline();
     }
 
     function exitPresentation() {
-        clearTimeout(playbackTimer);
+        pauseTimeline();
+        stopAudioPlayers();
+        if (waitingMarker) node(waitingMarker.objeto_id)?.classList.remove("click-wait-target");
+        waitingMarker = null;
         playing = false;
         document.body.classList.remove("presenting");
         $("presentation-controls").hidden = true;
+        setTimelineFrame(0, false);
     }
 
     function setTextColor(color) {
         const obj = current();
         if (!obj || obj.tipo === "imagen") return;
         obj.color = color;
+        const editedFrame = $("timeline-panel").hidden ? 0 : currentFrame;
+        const keyframe = obj.fotogramas.find(frame => frame.frame === editedFrame)
+            || addKeyframeForObject(obj, editedFrame, false);
+        if (keyframe) keyframe.color = color;
         $("font-color").value = color;
         mountStyle(obj);
         sync();
@@ -1136,15 +2856,29 @@
     $("delete-text").addEventListener("click", remove);
     $("edit-text").addEventListener("click", edit);
     $("images-tool").addEventListener("click", event => showGallery("imagenes", event.currentTarget));
+    $("ai-tool").addEventListener("click", event => showGallery("ia", event.currentTarget));
     $("elements-tool").addEventListener("click", event => showGallery("elementos", event.currentTarget));
     $("background-tool").addEventListener("click", event => showGallery("fondos", event.currentTarget));
+    $("audio-tool").addEventListener("click", event => showGallery("audios", event.currentTarget));
     $("animation-tool").addEventListener("click", event => showGallery("animaciones", event.currentTarget));
-    $("close-asset-panel").addEventListener("click", () => {
-        $("asset-panel").hidden = true;
-        for (const tool of [$("images-tool"), $("elements-tool"), $("background-tool"), $("animation-tool")]) {
-            tool.setAttribute("aria-expanded", "false");
-            tool.classList.remove("tool-active");
-        }
+    $("close-asset-panel").addEventListener("click", closeAssetPanel);
+    $("ai-generate-presentation").addEventListener("click", generateAIPresentation);
+    $("ai-apply-presentation").addEventListener("click", applyAIPresentation);
+    $("ai-convert-document").addEventListener("click", convertAIDocument);
+    $("ai-cancel-document").addEventListener("click", () => {
+        if (activeDocumentJob) requestDocumentAction(activeDocumentJob.cancel_url);
+    });
+    $("ai-retry-document").addEventListener("click", () => {
+        if (activeDocumentJob) requestDocumentAction(activeDocumentJob.retry_url);
+    });
+    $("ai-apply-document").addEventListener("click", applyAIDocument);
+    $("ai-generate-text").addEventListener("click", generateAIText);
+    $("ai-apply-text").addEventListener("click", applyAIText);
+    $("ai-generate-image").addEventListener("click", generateAIImage);
+    $("ai-apply-image").addEventListener("click", applyAIImage);
+    $("ai-slide-notes").addEventListener("input", event => {
+        slides[activeSlideIndex].notas = event.target.value;
+        sync();
     });
     document.querySelectorAll(".asset-choice").forEach(button => {
         button.addEventListener("click", () => {
@@ -1154,12 +2888,16 @@
             } else {
                 addElement(path);
             }
+            closeAssetPanelOnCompactScreen();
         });
     });
-    $("clear-background").addEventListener("click", () => setBackground(""));
+    $("clear-background").addEventListener("click", () => {
+        setBackground("");
+        closeAssetPanelOnCompactScreen();
+    });
     document.querySelectorAll(".animation-choice").forEach(button => {
         button.addEventListener("click", () => {
-            animateForScope(button.dataset.animation);
+            applyPresetForScope(button.dataset.keyframePreset);
         });
     });
     $("preview-animation").addEventListener("click", preview);
@@ -1260,6 +2998,9 @@
         if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
             event.preventDefault();
             const step = event.shiftKey ? 10 : 1;
+            const pose = evaluateObject(obj, $("timeline-panel").hidden ? 0 : currentFrame);
+            obj.x = pose.x;
+            obj.y = pose.y;
             obj.x = clamp(
                 obj.x + (event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0),
                 MIN_OBJECT_POSITION,
@@ -1272,10 +3013,11 @@
             );
             node(obj.id).style.left = `${obj.x}px`;
             node(obj.id).style.top = `${obj.y}px`;
-            if (obj.fotogramas?.[0]?.frame === 0) {
-                obj.fotogramas[0].x = obj.x;
-                obj.fotogramas[0].y = obj.y;
-            }
+            const editedFrame = $("timeline-panel").hidden ? 0 : currentFrame;
+            const keyframe = obj.fotogramas.find(frame => frame.frame === editedFrame)
+                || addKeyframeForObject(obj, editedFrame, false);
+            keyframe.x = obj.x;
+            keyframe.y = obj.y;
             sync();
         }
     });
@@ -1286,6 +3028,10 @@
             const input = $(id);
             if (!obj || obj.tipo === "imagen" || !input.checkValidity() || input.value === "") return;
             obj[key] = key === "tamano" ? Number(input.value) : input.value;
+            const editedFrame = $("timeline-panel").hidden ? 0 : currentFrame;
+            const keyframe = obj.fotogramas.find(frame => frame.frame === editedFrame)
+                || addKeyframeForObject(obj, editedFrame, false);
+            if (keyframe && ["fuente", "tamano", "color"].includes(key)) keyframe[key] = obj[key];
             mountStyle(obj);
             sync();
         });
@@ -1321,7 +3067,13 @@
         link.addEventListener("click", async event => {
             event.preventDefault();
             const saved = await save();
-            if (saved && !dirty()) window.location.assign(link.href);
+            if (saved && !dirty()) {
+                const destination = new URL(link.href, window.location.href);
+                if (link.classList.contains("animated-export")) {
+                    destination.searchParams.set("resolucion", $("export-resolution").value);
+                }
+                window.location.assign(destination.href);
+            }
             else showSaveError("Guarda los cambios antes de exportar.");
         });
     }
@@ -1343,7 +3095,7 @@
 
     const area = stage.parentElement.parentElement;
     new ResizeObserver(() => {
-        const compact = window.matchMedia("(max-width: 600px)").matches;
+        const compact = window.matchMedia("(max-width: 760px), (max-height: 600px) and (max-width: 950px)").matches;
         scale = Math.min(
             Math.max(100, area.clientWidth - (compact ? 16 : 48)) / 800,
             Math.max(100, area.clientHeight - (compact ? 60 : 100)) / 450
@@ -1351,6 +3103,8 @@
         $("stage-viewport").style.width = `${800 * scale}px`;
         $("stage-viewport").style.height = `${450 * scale}px`;
         stage.style.transform = `scale(${scale})`;
+        stage.style.setProperty("--resize-handle-size", compact ? `${Math.min(58, Math.max(24, 20 / scale))}px` : "10px");
+        stage.style.setProperty("--rotate-handle-size", compact ? `${Math.min(64, Math.max(30, 24 / scale))}px` : "20px");
     }).observe(area);
 
     $("slide-duration").value = String(Math.round(slides[activeSlideIndex].duracion_frames / 30));
@@ -1359,6 +3113,8 @@
         : "none";
     stage.style.backgroundColor = activeSlideColor;
     updateSlideColorPicker();
+    updateSelectedAudio();
+    updateAINotes();
     objects.forEach(mount);
     select(null);
     updateAnimationPanel();

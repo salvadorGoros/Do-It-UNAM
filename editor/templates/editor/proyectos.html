@@ -1,25 +1,100 @@
 {% extends 'editor/base.html' %}
+{% load static %}
 {% block title %}Mis proyectos · DO IT UNAM{% endblock %}
+{% block body_class %}projects-page{% endblock %}
 {% block content %}
-<h1>Mis proyectos</h1>
-<p class="muted">Crea un proyecto o continúa donde lo dejaste.</p>
-<section class="panel">
-    <h2>Nuevo proyecto</h2>
-    <form method="post" action="{% url 'editor:crear' %}" class="create-form">
-        {% csrf_token %}
-        <div class="field">{{ form.nombre.label_tag }}{{ form.nombre }}{{ form.nombre.errors }}</div>
-        <button type="submit">Crear proyecto</button>
-    </form>
+<section class="projects-hero" aria-labelledby="projects-title">
+    <div>
+        <p class="eyebrow">Espacio creativo</p>
+        <h1 id="projects-title">Mis proyectos</h1>
+        <p class="projects-intro">Crea, organiza y continúa tus presentaciones multimedia desde un solo lugar.</p>
+    </div>
+    <div class="projects-summary" aria-label="Resumen de proyectos">
+        <strong>{{ proyectos|length }}</strong>
+        <span>proyecto{{ proyectos|length|pluralize }}</span>
+    </div>
 </section>
-<section class="projects" aria-label="Proyectos guardados">
-    {% for proyecto in proyectos %}
-    <article class="panel project-card">
-        <h2><a href="{% url 'editor:detalle' proyecto.pk %}">{{ proyecto.nombre }}</a></h2>
-        <p class="muted small">Modificado: {{ proyecto.modificado|date:"d/m/Y H:i" }}</p>
-        <a class="open-link" href="{% url 'editor:detalle' proyecto.pk %}">Abrir proyecto →</a>
-    </article>
-    {% empty %}
-    <div class="panel empty"><h2>Aún no tienes proyectos</h2><p class="muted">Escribe un nombre arriba para crear el primero.</p></div>
-    {% endfor %}
-</section>
+
+<div class="projects-dashboard">
+    <aside class="new-project-card" aria-labelledby="new-project-title">
+        <div class="new-project-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <p class="eyebrow">Comienza algo nuevo</p>
+        <h2 id="new-project-title">Crear proyecto</h2>
+        <p>Empieza con un lienzo en blanco y agrega texto, audio, animaciones o contenido con IA.</p>
+        <form method="post" action="{% url 'editor:crear' %}" class="create-form">
+            {% csrf_token %}
+            <div class="field">{{ form.nombre.label_tag }}{{ form.nombre }}{{ form.nombre.errors }}</div>
+            <button type="submit">
+                <span>Crear y editar</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </form>
+        <p class="new-project-tip"><span aria-hidden="true">✦</span> Tus cambios se guardarán automáticamente.</p>
+    </aside>
+
+    <section class="project-library" aria-labelledby="library-title">
+        <header class="library-header">
+            <div>
+                <p class="eyebrow">Tu biblioteca</p>
+                <h2 id="library-title">Presentaciones recientes</h2>
+            </div>
+            {% if proyectos %}
+            <label class="project-search" for="project-search">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                <span class="sr-only">Buscar proyectos</span>
+                <input id="project-search" type="search" placeholder="Buscar por nombre…" autocomplete="off">
+            </label>
+            {% endif %}
+        </header>
+
+        <div id="project-grid" class="projects" aria-live="polite">
+            {% for proyecto in proyectos %}
+            <article class="project-card" data-project-name="{{ proyecto.nombre|lower }}">
+                <a class="project-preview" href="{% url 'editor:detalle' proyecto.pk %}" aria-label="Abrir {{ proyecto.nombre }}"
+                    data-preview-script="{{ proyecto.preview_script_id }}"
+                    data-asset-base="{% static 'editor/images/' %}"
+                    data-uploaded-image-base="{% url 'editor:imagenes_subidas' %}"
+                    data-user-id="{{ user.pk }}">
+                    <div class="project-preview-stage"></div>
+                    <span class="project-open-hint">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Abrir editor
+                    </span>
+                </a>
+                {{ proyecto.preview_data|json_script:proyecto.preview_script_id }}
+                <div class="project-card-body">
+                    <div class="project-card-heading">
+                        <h3><a href="{% url 'editor:detalle' proyecto.pk %}">{{ proyecto.nombre }}</a></h3>
+                        <time datetime="{{ proyecto.modificado|date:'c' }}">{{ proyecto.modificado|date:"d M Y" }}</time>
+                    </div>
+                    <div class="project-meta">
+                        <span>{{ proyecto.numero_diapositivas }} diapositiva{{ proyecto.numero_diapositivas|pluralize }}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{{ proyecto.total_objetos }} objeto{{ proyecto.total_objetos|pluralize }}</span>
+                    </div>
+                    <a class="open-link" href="{% url 'editor:detalle' proyecto.pk %}">
+                        Continuar editando
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </a>
+                </div>
+            </article>
+            {% empty %}
+            <div class="empty-projects">
+                <div aria-hidden="true">
+                    <svg viewBox="0 0 48 48" fill="none"><rect x="7" y="10" width="34" height="27" rx="4" stroke="currentColor" stroke-width="2"/><path d="M14 18h20M14 24h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </div>
+                <h2>Aún no tienes proyectos</h2>
+                <p>Escribe un nombre en el panel de creación para comenzar el primero.</p>
+            </div>
+            {% endfor %}
+        </div>
+        <div id="project-search-empty" class="search-empty" hidden>
+            <strong>No encontramos ese proyecto</strong>
+            <span>Prueba con otro nombre.</span>
+        </div>
+    </section>
+</div>
 {% endblock %}
+{% block scripts %}<script src="{% static 'editor/js/proyectos.js' %}?v=1" defer></script>{% endblock %}

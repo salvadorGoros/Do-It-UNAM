@@ -1,6 +1,7 @@
 # DO IT UNAM
 
-Editor multimedia con Python y Django, configuración en español y SQLite.
+Editor multimedia con Python y Django, configuración en español y soporte para
+SQLite en desarrollo o PostgreSQL en despliegue.
 Cada usuario puede crear proyectos de animación, agregar cuadros de texto y
 usar imágenes de las galerías de **Elementos** y **Fondos**.
 
@@ -20,6 +21,60 @@ Abrir http://127.0.0.1:8000/ y crear una cuenta o iniciar sesión para ver los
 proyectos propios.
 Para detener el servidor, vuelve a la misma ventana de PowerShell donde está
 ejecutándose y presiona **Ctrl+C**.
+
+## Configurar Gemini
+
+El apartado **IA** funciona con una clave de Google AI Studio. El proyecto ya
+incluye un archivo `.env` local, excluido por `.gitignore`. Abrirlo y completar:
+
+```dotenv
+GEMINI_API_KEY=pega_aqui_tu_clave
+```
+
+Después hay que reiniciar Django. La clave se utiliza solo en el servidor: no se
+envía al navegador, no se guarda en proyectos y no debe escribirse en el código.
+`GEMINI_TEXT_MODEL`, `GEMINI_IMAGE_MODEL` y `GEMINI_DAILY_TOKEN_LIMIT` pueden
+ajustarse en el mismo archivo sin modificar Python. `.env.example` documenta
+todos los valores disponibles.
+
+La IA permite crear diapositivas editables con viñetas, notas y sugerencias
+visuales; resumir o mejorar texto; crear viñetas o guiones; y generar imágenes o
+diagramas guardados en la biblioteca privada. Cada solicitud registra solamente
+el tipo de tarea, modelo, tokens y resultado, no el prompt ni la respuesta.
+
+Desde el mismo panel se pueden convertir archivos PDF o PPTX de hasta 50 MB en
+1 a 20 diapositivas editables. El PDF se analiza con la comprensión visual de
+Gemini; en PPTX se extraen textos, tablas y notas sin enviar el archivo original.
+El trabajo conserva progreso, cancelación y reintento, y solo su propietario puede
+consultarlo. La copia temporal subida a Gemini para un PDF se elimina al terminar.
+
+## PostgreSQL, Redis y el trabajador
+
+El modo local usa SQLite y ejecuta la cola inmediatamente. Para separar las
+conversiones del servidor web, configura en `.env`:
+
+```dotenv
+POSTGRES_DB=doit_unam
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=una_contrasena_segura
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+CELERY_TASK_ALWAYS_EAGER=0
+CELERY_BROKER_URL=redis://127.0.0.1:6379/0
+CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1
+```
+
+Con PostgreSQL y Redis encendidos, aplica las migraciones e inicia en terminales
+separadas Django y el trabajador:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py migrate
+.\.venv\Scripts\python.exe manage.py runserver
+.\.venv\Scripts\python.exe -m celery -A config worker -l INFO --pool=solo
+```
+
+En Windows se usa `--pool=solo`; en Linux se puede omitir. Si `POSTGRES_DB` queda
+vacío, el proyecto continúa usando `db.sqlite3`.
 
 ## Compartir temporalmente por internet
 
@@ -52,10 +107,23 @@ Introducir usuario, correo y contraseña cuando se soliciten. La contraseña no 
 muestra al escribir y no debe añadirse al código ni a este archivo.
 
 Quienes usarán el editor pueden crear su propia cuenta desde **Regístrate aquí**
-en la pantalla de inicio de sesión, o abrir `/cuentas/registro/`. Se pide un
-nombre de usuario y una contraseña confirmada; Django valida y guarda la
-contraseña de forma segura. Después del registro, la sesión inicia
-automáticamente. También se pueden administrar cuentas desde el panel de Django.
+en la pantalla de inicio de sesión, o abrir `/cuentas/registro/`. Se exige correo
+`@comunidad.unam.mx`; el número de cuenta es opcional y también sirve para iniciar
+sesión. Django valida y guarda la contraseña de forma segura. Todas las altas
+reciben el rol **Alumno**; un administrador puede cambiarlas a **Docente** o
+**Administrador** desde `/admin/`.
+
+Las cuotas iniciales son 10,000 tokens diarios para Alumno, 50,000 para Docente y
+200,000 para Administrador. Se editan en **Roles** dentro del panel administrativo
+y se aplican inmediatamente. El historial de consumo se puede filtrar por rol,
+operación, modelo, resultado y fecha.
+
+Para no bloquear las cuentas creadas antes de esta migración, `.env` incluye
+`ALLOW_LEGACY_USERNAME_LOGIN=1`. Primero agrega a cada cuenta anterior su perfil
+institucional desde **Perfiles de usuario** y después cambia el valor a `0` para
+restringir completamente el acceso. Los enlaces de recuperación de contraseña
+se imprimen en la terminal durante el desarrollo; en producción debe configurarse
+un backend SMTP de Django.
 
 ## Uso
 
@@ -77,12 +145,24 @@ modificación y solo su propietario puede abrirlos o cambiarles el nombre en el 
 Cada diapositiva admite hasta 100 objetos. Agrega hojas en la barra inferior,
 selecciónalas para editarlas de forma independiente, duplica, cambia su orden,
 elimina, copia y pega hojas. También puedes copiar y pegar objetos con Ctrl+C y
-Ctrl+V. Cada hoja tiene una duración de 1 a 120 segundos; **Presentar** cambia de
+Ctrl+V. Cada hoja tiene una duración de 1 a 3600 segundos; **Presentar** cambia de
 hoja automáticamente al terminar ese tiempo y también permite avanzar con las
 flechas del teclado. Presiona Escape para salir.
+
+En teléfonos y tabletas, las herramientas cambian a una barra horizontal y las
+bibliotecas se abren como paneles superpuestos. La línea de tiempo aparece como
+una hoja inferior compacta, los menús respetan las áreas seguras del dispositivo
+y cada miniatura incluye un botón táctil para copiar, duplicar o eliminar. El lienzo
+se ajusta automáticamente tanto en orientación vertical como horizontal.
 Los cuadros de texto aceptan hasta 5000
 caracteres, incluidos saltos de línea; los elementos gráficos se pueden mover,
 redimensionar y animar igual que los cuadros.
+En **Audio** puedes subir archivos MP3, WAV, OGG o M4A de hasta 25 MB, escuchar
+una vista previa y asignar hasta tres pistas a cada diapositiva. La línea de tiempo
+permite ajustar inicio, recorte, volumen, silencio, fundido de entrada y salida, y
+muestra la forma de onda. La duración se amplía al agregar audio o fotogramas que
+terminan después del final actual. Quitar una pista no la borra de la biblioteca
+privada del usuario.
 Enter edita el cuadro seleccionado, Escape termina la edición, las flechas lo
 mueven (Shift mueve 10 píxeles) y Supr lo elimina cuando no estás escribiendo.
 Ctrl+Z o la flecha curva izquierda deshacen la última edición; Ctrl+Y, Ctrl+Shift+Z
@@ -92,28 +172,43 @@ Los cuadros mantienen su posición sobre un lienzo de 800 × 450 que se escala p
 ajustarse al espacio disponible. El texto que excede el cuadro queda recortado:
 amplía el cuadro o reduce la fuente para verlo completo. Cada objeto tiene un ID
 estable, texto plano, posición, dimensiones y formato. Abre **Animar** y elige un
-efecto predefinido. Puedes aplicarlo al objeto seleccionado, a todos los objetos
-de la diapositiva o a toda la presentación. **Vista previa** muestra los efectos;
-en **Presentar** se reproducen al entrar a cada diapositiva.
-La exportación PDF y PNG es estática. PowerPoint conserva texto e imágenes como
-objetos editables; las animaciones se reproducen en el modo Presentar del editor.
+preajuste de entrada, énfasis o salida. El botón **Línea de tiempo** abre un panel
+desplegable y redimensionable a 30 fps con zoom, bucle, pistas agrupadas y
+selección múltiple de fotogramas. Desde su inspector se animan posición, tamaño,
+rotación, opacidad, color, tipografía y contenido con transiciones lineales,
+suaves, rebote, instantáneas o Bézier. Para texto existen cambio instantáneo,
+escritura progresiva y transición. Las rutas de movimiento son visibles y
+editables sobre el lienzo. Las animaciones pueden guardarse como plantillas
+privadas reutilizables entre proyectos.
+
+**+ Clic** agrega una pausa vinculada al objeto seleccionado: en Presentar se
+detienen animación y audio hasta pulsar ese objeto. Las exportaciones no esperan
+estas pausas. MP4 incluye las pistas mezcladas y GIF se genera sin audio, ambos
+en 1080p o 720p. PDF y PNG siguen siendo estáticos; PowerPoint conserva texto e
+imágenes como objetos editables.
 Las imágenes se descargan juntas como un ZIP de PNG.
 Se necesita JavaScript para editar. Se avisa al salir mientras hay cambios sin guardar.
 
 ## Archivos principales
 
-- `config/settings.py`: configuración de Django y SQLite.
+- `config/settings.py`: configuración de Django, SQLite/PostgreSQL y Celery/Redis.
+- `config/celery.py`: aplicación de tareas asíncronas.
 - `config/urls.py`: rutas del proyecto.
 - `editor/urls.py` y `editor/views.py`: ruta y vista del editor.
 - `editor/templates/editor/index.html`: plantilla activa; editar aquí la interfaz.
 - `editor/models.py`, `editor/forms.py` y `editor/scene.py`: proyecto y validación de la escena.
 - `editor/static/editor/js/editor.js`: diapositivas, reproducción y edición del lienzo.
-- `editor/exports.py`: exportación a PDF, PowerPoint editable y PNG.
+- `editor/gemini.py`: acceso de servidor a Gemini y validación de respuestas estructuradas.
+- `editor/documents.py` y `editor/tasks.py`: validación, extracción y conversión en segundo plano de PDF/PPTX.
+- `editor/exports.py`: exportación a MP4, GIF, PDF, PowerPoint editable y PNG.
 - `editor/migrations/`: migraciones del proyecto, incluidas las diapositivas.
 - `editor/static/editor/images/logo.png`: logo PNG usado en los encabezados y el acceso a **Mis proyectos**.
 - `editor/static/editor/images/favicon.png`: versión recortada del emblema para la pestaña del navegador.
 - `editor/static/editor/images/elementos/`: imágenes PNG, JPG, JPEG o WebP disponibles en la sección **Elementos**.
 - `editor/static/editor/images/fondos/`: imágenes PNG, JPG, JPEG o WebP disponibles en la sección **Fondos**.
+- `media/audio_uploads/`: biblioteca privada de audios subidos, separada por usuario.
+- `media/documentos/`: documentos fuente privados, separados por usuario.
+- `docs/ANALISIS_REQUERIMIENTOS_IA.md`: comparación entre los requerimientos, lo implementado y lo pendiente.
 - `editor/templates/editor/proyectos.html`: listado y creación de proyectos.
 - `editor/templates/registration/login.html`: inicio de sesión.
 - `editor/static/editor/css/editor.css`: estilos propios.

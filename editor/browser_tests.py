@@ -32,6 +32,122 @@ class EditorBrowserTests(StaticLiveServerTestCase):
         self.media_directory.cleanup()
         super().tearDown()
 
+    def test_registro_institucional_e_inicio_con_numero_de_cuenta(self):
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 360, "height": 800})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.live_server_url + "/cuentas/registro/")
+            self.assertLessEqual(
+                page.locator("html").evaluate("el => el.scrollWidth"),
+                page.locator("html").evaluate("el => el.clientWidth"),
+            )
+            self.assertTrue(page.locator(".register-page .auth-shell").is_visible())
+            page.locator('[name="correo_institucional"]').fill("nueva@comunidad.unam.mx")
+            page.locator('[name="numero_cuenta"]').fill("31-2345-699")
+            page.locator('[name="password1"]').fill("Browser-test-123!")
+            page.locator('[name="password2"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Crear cuenta", exact=True).click()
+            page.wait_for_url(self.live_server_url + "/")
+            self.assertIn("Alumno", page.locator(".account").inner_text())
+            page.get_by_role("button", name="Cerrar sesión", exact=True).click()
+            page.wait_for_selector(".login-page .auth-shell")
+            self.assertLessEqual(
+                page.locator("html").evaluate("el => el.scrollWidth"),
+                page.locator("html").evaluate("el => el.clientWidth"),
+            )
+            page.locator('[name="username"]').fill("312345699")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.wait_for_url(self.live_server_url + "/")
+            self.assertEqual(errors, [])
+            browser.close()
+
+    def test_panel_de_proyectos_filtra_y_se_adapta_a_movil(self):
+        user = get_user_model().objects.create_user("projects-browser-test", password="Browser-test-123!")
+        Proyecto.objects.create(
+            nombre="Biología celular",
+            propietario=user,
+            diapositivas=[{
+                "id": "slide-1",
+                "color_fondo": "#dbeafe",
+                "fondo": "",
+                "duracion_frames": 300,
+                "objetos": [{
+                    "id": "text-1", "texto": "La célula", "x": 80, "y": 90,
+                    "ancho": 420, "alto": 90, "tamano": 42, "color": "#0b3b60",
+                    "fuente": "Poppins", "negrita": True, "cursiva": False,
+                    "subrayado": False, "alineacion": "left",
+                    "fotogramas": [{
+                        "frame": 0, "x": 80, "y": 90, "giro": 0,
+                        "opacidad": 1, "interpolacion": "lineal",
+                    }],
+                }],
+            }],
+        )
+        Proyecto.objects.create(nombre="Historia universal", propietario=user)
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.live_server_url + "/")
+            page.locator('[name="username"]').fill("projects-browser-test")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.wait_for_url(self.live_server_url + "/")
+
+            self.assertEqual(page.locator(".project-card").count(), 2)
+            self.assertEqual(page.locator(".preview-text").first.inner_text(), "La célula")
+            page.locator("#project-search").fill("biologia")
+            self.assertEqual(page.locator(".project-card:visible").count(), 1)
+            page.locator("#project-search").fill("inexistente")
+            self.assertTrue(page.locator("#project-search-empty").is_visible())
+
+            page.set_viewport_size({"width": 390, "height": 844})
+            page.locator("#project-search").fill("")
+            self.assertLessEqual(
+                page.locator("html").evaluate("el => el.scrollWidth"),
+                page.locator("html").evaluate("el => el.clientWidth"),
+            )
+            self.assertEqual(errors, [])
+            browser.close()
+
+    @override_settings(GEMINI_API_KEY="")
+    def test_panel_ia_indica_configuracion_pendiente_sin_errores(self):
+        user = get_user_model().objects.create_user("ai-browser-test", password="Browser-test-123!")
+        proyecto = Proyecto.objects.create(nombre="IA", propietario=user)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.live_server_url + f"/proyectos/{proyecto.pk}/")
+            page.locator('[name="username"]').fill("ai-browser-test")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.wait_for_selector("#ai-tool")
+            page.locator("#ai-tool").click()
+            page.wait_for_function(
+                "() => document.querySelector('#ai-connection-text').textContent.includes('GEMINI_API_KEY')"
+            )
+            self.assertTrue(page.locator('[data-gallery="ia"]').is_visible())
+            self.assertTrue(page.locator("#ai-generate-presentation").is_disabled())
+            page.locator("details.ai-card").nth(2).locator("summary").click()
+            page.locator("#ai-slide-notes").fill("Guion guardado desde el panel de IA")
+            page.wait_for_function(
+                "() => document.querySelector('#save-status').textContent.includes('Guardado automáticamente')"
+            )
+            page.reload()
+            page.wait_for_selector("#ai-tool")
+            page.locator("#ai-tool").click()
+            page.locator("details.ai-card").nth(2).locator("summary").click()
+            self.assertEqual(page.locator("#ai-slide-notes").input_value(), "Guion guardado desde el panel de IA")
+            self.assertEqual(errors, [])
+            browser.close()
+
     def test_color_de_fondo_por_diapositiva(self):
         user = get_user_model().objects.create_user("slide-color-test", email="slide-color@example.com")
         user.set_password("Browser-test-123!")
@@ -236,12 +352,66 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             mobile_area = page.locator(".stage-area").bounding_box()
             self.assertLessEqual(mobile_stage["width"], mobile_area["width"])
             self.assertLessEqual(mobile_stage["height"], mobile_area["height"])
+            self.assertGreaterEqual(page.locator("#text-tool").bounding_box()["height"], 44)
+
+            page.locator("#elements-tool").click()
+            asset_panel = page.locator("#asset-panel").bounding_box()
+            self.assertGreaterEqual(asset_panel["x"], 0)
+            self.assertLessEqual(asset_panel["x"] + asset_panel["width"], 390)
+            page.locator("#close-asset-panel").click()
+
+            page.locator("#toggle-timeline").click()
+            timeline = page.locator("#timeline-panel").bounding_box()
+            timeline_area = page.locator(".stage-area").bounding_box()
+            slide_rail = page.locator(".slide-footer").bounding_box()
+            workspace = page.locator(".editor-workspace").bounding_box()
+            self.assertLessEqual(timeline["height"], 250)
+            self.assertGreaterEqual(timeline["x"], 0)
+            self.assertLessEqual(timeline["x"] + timeline["width"], 390)
+            self.assertEqual(page.locator("#timeline-panel").evaluate("el => getComputedStyle(el).position"), "relative")
+            self.assertTrue(page.locator("#toggle-timeline").is_hidden())
+            self.assertTrue(page.locator("body").evaluate("el => el.classList.contains('timeline-open')"))
+            self.assertGreaterEqual(slide_rail["x"] + 1, timeline_area["x"] + timeline_area["width"])
+            self.assertLessEqual(slide_rail["y"] + slide_rail["height"], timeline["y"] + 1)
+            self.assertAlmostEqual(timeline["y"] + timeline["height"], workspace["y"] + workspace["height"], delta=2)
+            page.locator("#close-timeline").click()
+            self.assertTrue(page.locator("#toggle-timeline").is_visible())
+            self.assertFalse(page.locator("body").evaluate("el => el.classList.contains('timeline-open')"))
+
+            self.assertTrue(page.locator(".slide-options-trigger").first.is_visible())
+            page.locator(".slide-options-trigger").first.click()
+            menu = page.locator("#slide-context-menu").bounding_box()
+            self.assertGreaterEqual(menu["x"], 0)
+            self.assertLessEqual(menu["x"] + menu["width"], 390)
+            page.keyboard.press("Escape")
+
+            page.set_viewport_size({"width": 844, "height": 390})
+            page.wait_for_function(
+                "() => getComputedStyle(document.querySelector('#editor-shell > aside')).flexDirection === 'row'"
+            )
+            self.assertLessEqual(
+                page.locator("html").evaluate("el => el.scrollWidth"),
+                page.locator("html").evaluate("el => el.clientWidth"),
+            )
+            landscape_stage = page.locator("#stage").bounding_box()
+            landscape_area = page.locator(".stage-area").bounding_box()
+            self.assertLessEqual(landscape_stage["width"], landscape_area["width"])
+            self.assertLessEqual(landscape_stage["height"], landscape_area["height"])
+            page.locator("#toggle-timeline").click()
+            landscape_timeline = page.locator("#timeline-panel").bounding_box()
+            landscape_area = page.locator(".stage-area").bounding_box()
+            landscape_rail = page.locator(".slide-footer").bounding_box()
+            self.assertLessEqual(landscape_timeline["height"], 210)
+            self.assertGreaterEqual(landscape_rail["x"] + 1, landscape_area["x"] + landscape_area["width"])
+            self.assertLessEqual(landscape_rail["y"] + landscape_rail["height"], landscape_timeline["y"] + 1)
+            self.assertTrue(page.locator("#toggle-timeline").is_hidden())
+            page.locator("#close-timeline").click()
             page.set_viewport_size({"width": 1440, "height": 1000})
             page.wait_for_function(
                 "() => getComputedStyle(document.querySelector('#editor-shell > aside')).flexDirection === 'column'"
             )
             page.locator(".share-menu summary").click()
-            self.assertEqual(page.locator(".share-menu-items a").count(), 3)
+            self.assertEqual(page.locator(".share-menu-items a").count(), 5)
             self.assertTrue(page.get_by_role("link", name="Descargar PDF").is_visible())
             page.locator(".share-menu summary").click()
 
@@ -259,6 +429,17 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             textarea = page.locator(".text-object textarea").first
             textarea.fill("Texto inicial")
             textarea.press("Escape")
+            page.set_viewport_size({"width": 390, "height": 844})
+            page.wait_for_function(
+                "() => parseFloat(getComputedStyle(document.querySelector('.resize-se')).width) >= 24"
+            )
+            handle = page.locator(".resize-se").bounding_box()
+            self.assertGreaterEqual(handle["width"], 18)
+            self.assertGreaterEqual(handle["height"], 18)
+            page.set_viewport_size({"width": 1440, "height": 1000})
+            page.wait_for_function(
+                "() => getComputedStyle(document.querySelector('#editor-shell > aside')).flexDirection === 'column'"
+            )
             page.wait_for_timeout(600)
             textarea.press("Enter")
             textarea.fill("Texto actualizado")
@@ -664,7 +845,7 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.locator('[data-animation="subir"]').click()
             self.assertEqual(scene()[0]["animacion"], "subir")
             page.locator("#preview-animation").click()
-            self.assertGreater(page.locator(".text-object").first.evaluate("el => el.getAnimations().length"), 0)
+            page.wait_for_function("() => !document.querySelector('#timeline-time').textContent.endsWith('F0')")
             page.locator("#text-tool").click()
             second = page.locator(".text-object textarea").last
             second.fill("Segundo cuadro")
@@ -703,3 +884,135 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             browser.close()
         proyecto.refresh_from_db()
         self.assertEqual(proyecto.objetos, [expected[0]])
+
+    def test_audio_se_asigna_a_una_diapositiva_y_persiste(self):
+        user = get_user_model().objects.create_user("audio-test", password="Browser-test-123!")
+        proyecto = Proyecto.objects.create(nombre="Audio", propietario=user)
+        audio_data = (
+            b"RIFF" + (36).to_bytes(4, "little") + b"WAVE"
+            + b"fmt " + (16).to_bytes(4, "little")
+            + (1).to_bytes(2, "little") + (1).to_bytes(2, "little")
+            + (8000).to_bytes(4, "little") + (8000).to_bytes(4, "little")
+            + (1).to_bytes(2, "little") + (8).to_bytes(2, "little")
+            + b"data" + (0).to_bytes(4, "little")
+        )
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.live_server_url + f"/proyectos/{proyecto.pk}/")
+            page.locator('[name="username"]').fill("audio-test")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.wait_for_selector("#audio-tool")
+
+            page.locator("#audio-tool").click()
+            page.locator("#audio-file-input").set_input_files({
+                "name": "narracion.wav",
+                "mimeType": "audio/wav",
+                "buffer": audio_data,
+            })
+            page.wait_for_selector("#uploaded-audio-list .audio-select")
+            page.locator("#uploaded-audio-list .audio-select").click()
+            page.wait_for_function(
+                "() => JSON.parse(document.querySelector('#id_diapositivas').value)[0].audio"
+            )
+            audio_path = json.loads(page.locator("#id_diapositivas").input_value())[0]["audio"]
+            self.assertTrue(audio_path.startswith(f"audio_uploads/{user.pk}/"))
+            self.assertFalse(page.locator("#selected-audio-preview").is_hidden())
+            page.wait_for_function(
+                "() => document.querySelector('#save-status').textContent.includes('Guardado automáticamente')"
+            )
+
+            page.reload()
+            page.wait_for_selector("#audio-tool")
+            self.assertEqual(
+                json.loads(page.locator("#id_diapositivas").input_value())[0]["audio"],
+                audio_path,
+            )
+            page.locator("#audio-tool").click()
+            self.assertFalse(page.locator("#clear-audio").is_disabled())
+            page.locator("#clear-audio").click()
+            self.assertEqual(json.loads(page.locator("#id_diapositivas").input_value())[0]["audio"], "")
+            self.assertEqual(errors, [])
+            browser.close()
+
+    def test_linea_de_tiempo_fotogramas_marcador_y_plantilla(self):
+        user = get_user_model().objects.create_user("timeline-test", password="Browser-test-123!")
+        proyecto = Proyecto.objects.create(nombre="Línea de tiempo", propietario=user)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1100})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.live_server_url + f"/proyectos/{proyecto.pk}/")
+            page.locator('[name="username"]').fill("timeline-test")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.locator("#text-tool").click()
+            page.locator(".text-object textarea").fill("Objeto interactivo")
+            page.locator(".text-object textarea").press("Escape")
+
+            page.locator("#toggle-timeline").click()
+            self.assertTrue(page.locator("#timeline-panel").is_visible())
+            self.assertLessEqual(page.locator("#timeline-panel").bounding_box()["height"], 268)
+            self.assertTrue(page.locator("#toggle-timeline").is_hidden())
+            timeline = page.locator("#timeline-panel").bounding_box()
+            timeline_area = page.locator(".stage-area").bounding_box()
+            slide_rail = page.locator(".slide-footer").bounding_box()
+            workspace = page.locator(".editor-workspace").bounding_box()
+            self.assertGreaterEqual(slide_rail["x"] + 1, timeline_area["x"] + timeline_area["width"])
+            self.assertLessEqual(slide_rail["y"] + slide_rail["height"], timeline["y"] + 1)
+            self.assertAlmostEqual(timeline["x"], workspace["x"], delta=1)
+            self.assertAlmostEqual(timeline["width"], workspace["width"], delta=1)
+            self.assertEqual(page.locator(".timeline-ruler-corner").inner_text(), "PISTAS")
+            page.locator("#animation-tool").click()
+            page.locator('[data-keyframe-preset="subir"]').click()
+            scene = lambda: json.loads(page.locator("#id_diapositivas").input_value())[0]
+            self.assertEqual(len(scene()["objetos"][0]["fotogramas"]), 2)
+
+            page.locator(".timeline-keyframe").last.click()
+            self.assertTrue(page.locator("#keyframe-inspector-panel").evaluate("el => el.open"))
+            page.locator("#keyframe-opacity").fill("0.65")
+            page.locator("#keyframe-opacity").press("Enter")
+            page.locator("#keyframe-easing").select_option("bezier")
+            page.locator("#bezier-y1").fill("1.4")
+            page.locator("#bezier-y1").press("Enter")
+            page.locator("#timeline-zoom").fill("180")
+            self.assertEqual(
+                page.locator("#timeline-panel").evaluate("el => el.style.getPropertyValue('--timeline-second')"),
+                "180px",
+            )
+            page.locator("#timeline-add-marker").click()
+            self.assertEqual(len(scene()["marcadores"]), 1)
+            self.assertEqual(scene()["marcadores"][0]["objeto_id"], scene()["objetos"][0]["id"])
+            self.assertEqual(scene()["objetos"][0]["fotogramas"][-1]["opacidad"], 0.65)
+            self.assertEqual(scene()["objetos"][0]["fotogramas"][-1]["bezier"][1], 1.4)
+
+            page.locator("#animation-template-panel summary").click()
+            page.locator("#animation-template-name").fill("Entrada privada")
+            page.locator("#save-animation-template").click()
+            page.wait_for_selector("#animation-template-list .template-item")
+            self.assertIn("Entrada privada", page.locator("#animation-template-list").inner_text())
+
+            page.locator("#slide-duration").fill("2")
+            page.locator("#slide-duration").press("Enter")
+            page.locator("#present-button").click()
+            presentation_area = page.locator(".stage-area").bounding_box()
+            self.assertAlmostEqual(presentation_area["width"], 1440, delta=1)
+            self.assertAlmostEqual(presentation_area["height"], 1100, delta=1)
+            page.wait_for_selector(".click-wait-target", timeout=5000)
+            page.locator(".click-wait-target").click()
+            page.wait_for_selector(".click-wait-target", state="detached")
+            page.locator("#exit-presentation").click()
+            page.wait_for_function(
+                "() => document.querySelector('#save-status').textContent.startsWith('Guardado autom')"
+            )
+            page.reload()
+            page.wait_for_selector("#toggle-timeline")
+            persisted = scene()
+            self.assertEqual(len(persisted["marcadores"]), 1)
+            self.assertEqual(persisted["objetos"][0]["fotogramas"][-1]["opacidad"], 0.65)
+            self.assertEqual(errors, [])
+            browser.close()

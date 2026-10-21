@@ -1,18 +1,69 @@
 {% extends 'editor/base.html' %}
 {% block title %}Iniciar sesión · DO IT UNAM{% endblock %}
+{% block body_class %}auth-page login-page{% endblock %}
 {% block content %}
-<section class="panel login-panel">
-    <h1>Iniciar sesión</h1>
-    <p class="muted">Entra para continuar con tus proyectos.</p>
-    <form method="post" action="{% url 'login' %}">
-        {% csrf_token %}
-        {{ form.non_field_errors }}
-        {% for field in form %}
-        <div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
-        {% endfor %}
-        <input type="hidden" name="next" value="{{ next }}">
-        <button type="submit">Entrar</button>
-    </form>
-    <p class="muted small account-links">¿Aún no tienes cuenta? <a href="{% url 'editor:registro' %}">Regístrate aquí</a>.</p>
-</section>
+<div class="auth-shell">
+    <section class="auth-story" aria-labelledby="auth-welcome-title">
+        <div class="auth-story-content">
+            <p class="auth-eyebrow">Tu espacio creativo UNAM</p>
+            <h1 id="auth-welcome-title">Convierte tus ideas en experiencias multimedia.</h1>
+            <p class="auth-story-copy">Diseña presentaciones, anima objetos, mezcla audio y aprovecha la IA desde un solo editor.</p>
+            <ul class="auth-benefits" aria-label="Funciones principales">
+                <li>
+                    <span class="auth-benefit-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-4 3v-3a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span><strong>Todo en un mismo lienzo</strong><small>Texto, imágenes, audio y animaciones.</small></span>
+                </li>
+                <li>
+                    <span class="auth-benefit-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" stroke="currentColor" stroke-width="1.5"/></svg>
+                    </span>
+                    <span><strong>Asistencia con IA</strong><small>Genera y organiza contenido más rápido.</small></span>
+                </li>
+            </ul>
+        </div>
+        <div class="auth-canvas-preview" aria-hidden="true">
+            <span class="auth-canvas-dot"></span>
+            <div class="auth-mini-window">
+                <div class="auth-mini-toolbar"><i></i><i></i><i></i></div>
+                <div class="auth-mini-slide">
+                    <span>DO IT UNAM</span>
+                    <strong>Presenta tus ideas</strong>
+                    <i></i>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="auth-card" aria-labelledby="login-title">
+        <div class="auth-card-heading">
+            <p class="auth-eyebrow">Bienvenido de vuelta</p>
+            <h2 id="login-title">Iniciar sesión</h2>
+            <p>Ingresa con tus datos de la comunidad UNAM.</p>
+        </div>
+        <form method="post" action="{% url 'login' %}" class="auth-form">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            {% for field in form.hidden_fields %}{{ field }}{% endfor %}
+            {% for field in form.visible_fields %}
+            <div class="field auth-field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>
+            {% endfor %}
+            <input type="hidden" name="next" value="{{ next }}">
+            <div class="auth-form-options">
+                <span>Acceso institucional seguro</span>
+                <a href="{% url 'password_reset' %}">¿Olvidaste tu contraseña?</a>
+            </div>
+            <button class="auth-submit" type="submit">
+                <span>Entrar</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </form>
+        <p class="auth-switch">¿Aún no tienes cuenta? <a href="{% url 'editor:registro' %}">Regístrate aquí</a></p>
+        <p class="auth-privacy">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.8"/></svg>
+            Tus proyectos son privados y solo tú puedes acceder a ellos.
+        </p>
+    </section>
+</div>
 {% endblock %}

@@ -11,7 +11,18 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 UPLOADED_IMAGE_PATTERN = re.compile(
     r"uploads/[1-9]\d*/[a-f0-9]{32}(?:_[a-zA-Z0-9_-]{1,60})?\.(?:png|jpg|webp)"
 )
-ANIMATION_PRESETS = {"ninguna", "aparecer", "subir", "zoom", "girar", "rebote"}
+UPLOADED_AUDIO_PATTERN = re.compile(
+    r"audio_uploads/[1-9]\d*/[a-f0-9]{32}(?:_[a-zA-Z0-9_-]{1,60})?\.(?:mp3|wav|ogg|m4a)"
+)
+ANIMATION_PRESETS = {
+    "ninguna", "aparecer", "subir", "zoom", "girar", "rebote", "pulso",
+    "desaparecer", "salir-arriba",
+}
+FONT_FAMILIES = {"Poppins", "Arial", "Georgia", "Verdana", "Courier New"}
+KEYFRAME_INTERPOLATIONS = {"lineal", "suave", "rebote", "instantanea", "bezier"}
+TEXT_TRANSITIONS = {"instantaneo", "escritura", "transicion"}
+MAX_SLIDE_FRAMES = 108000
+MAX_AUDIO_TRACKS = 3
 MIN_OBJECT_POSITION = -8000
 MAX_OBJECT_POSITION = 8000
 MAX_OBJECT_WIDTH = 8000
@@ -56,9 +67,24 @@ def imagenes_pertenecen_usuario(diapositivas, usuario_id):
     )
 
 
+def audios_pertenecen_usuario(diapositivas, usuario_id):
+    prefix = f"audio_uploads/{usuario_id}/"
+    return all(
+        (
+            not slide.get("audio") or slide["audio"].startswith(prefix)
+        ) and all(track["path"].startswith(prefix) for track in slide.get("audios", []))
+        for slide in diapositivas
+    )
+
+
 def validar_fondo(fondo):
     if fondo and not ruta_imagen_valida(fondo, "fondos"):
         raise ValidationError("El fondo seleccionado no está disponible.")
+
+
+def validar_audio(audio):
+    if not isinstance(audio, str) or (audio and not UPLOADED_AUDIO_PATTERN.fullmatch(audio)):
+        raise ValidationError("El audio seleccionado no está disponible.")
 
 
 def validar_diapositivas(diapositivas):
@@ -69,9 +95,11 @@ def validar_diapositivas(diapositivas):
         invalid()
     for diapositiva in diapositivas:
         required_keys = {"id", "objetos", "fondo", "duracion_frames"}
+        optional_keys = {"color_fondo", "audio", "audios", "marcadores", "notas"}
         if (
             not isinstance(diapositiva, dict)
-            or set(diapositiva) not in (required_keys, required_keys | {"color_fondo"})
+            or not required_keys.issubset(diapositiva)
+            or not set(diapositiva).issubset(required_keys | optional_keys)
         ):
             invalid()
         if not isinstance(diapositiva["id"], str) or not re.fullmatch(
@@ -81,13 +109,17 @@ def validar_diapositivas(diapositivas):
         try:
             validar_objetos(diapositiva["objetos"])
             validar_fondo(diapositiva["fondo"])
+            validar_audio(diapositiva.get("audio", ""))
         except ValidationError:
             invalid()
         color_fondo = diapositiva.get("color_fondo", "#ffffff")
         if not isinstance(color_fondo, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color_fondo):
             invalid()
+        notas = diapositiva.get("notas", "")
+        if not isinstance(notas, str) or len(notas) > 20_000:
+            invalid()
         duracion = diapositiva["duracion_frames"]
-        if type(duracion) is not int or not 30 <= duracion <= 3600:
+        if type(duracion) is not int or not 30 <= duracion <= MAX_SLIDE_FRAMES:
             invalid()
         if any(
             key["frame"] > duracion
@@ -95,6 +127,63 @@ def validar_diapositivas(diapositivas):
             for key in obj["fotogramas"]
         ):
             invalid()
+        audios = diapositiva.get("audios", [])
+        if not isinstance(audios, list) or len(audios) > MAX_AUDIO_TRACKS:
+            invalid()
+        audio_ids = set()
+        audio_keys = {
+            "id", "path", "inicio_frame", "recorte_inicio", "recorte_fin",
+            "volumen", "silenciado", "fundido_entrada", "fundido_salida",
+        }
+        for track in audios:
+            if not isinstance(track, dict) or set(track) != audio_keys:
+                invalid()
+            if (
+                not isinstance(track["id"], str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", track["id"])
+                or track["id"] in audio_ids
+            ):
+                invalid()
+            audio_ids.add(track["id"])
+            try:
+                validar_audio(track["path"])
+            except ValidationError:
+                invalid()
+            if type(track["inicio_frame"]) is not int or not 0 <= track["inicio_frame"] <= MAX_SLIDE_FRAMES:
+                invalid()
+            for field in ("recorte_inicio", "fundido_entrada", "fundido_salida"):
+                value = track[field]
+                if type(value) not in (int, float) or not 0 <= value <= 3600 or not math.isfinite(value):
+                    invalid()
+            recorte_fin = track["recorte_fin"]
+            if recorte_fin is not None and (
+                type(recorte_fin) not in (int, float)
+                or not track["recorte_inicio"] < recorte_fin <= 3600
+                or not math.isfinite(recorte_fin)
+            ):
+                invalid()
+            if type(track["volumen"]) not in (int, float) or not 0 <= track["volumen"] <= 1:
+                invalid()
+            if type(track["silenciado"]) is not bool:
+                invalid()
+        markers = diapositiva.get("marcadores", [])
+        if not isinstance(markers, list) or len(markers) > 100:
+            invalid()
+        marker_ids = set()
+        object_ids = {obj["id"] for obj in diapositiva["objetos"]}
+        for marker in markers:
+            if not isinstance(marker, dict) or set(marker) != {"id", "frame", "objeto_id"}:
+                invalid()
+            if (
+                not isinstance(marker["id"], str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", marker["id"])
+                or marker["id"] in marker_ids
+                or type(marker["frame"]) is not int
+                or not 0 <= marker["frame"] <= duracion
+                or marker["objeto_id"] not in object_ids
+            ):
+                invalid()
+            marker_ids.add(marker["id"])
 
 
 def completar_animacion(objetos, anteriores=()):
@@ -110,6 +199,21 @@ def completar_animacion(objetos, anteriores=()):
     return objetos
 
 
+def validar_plantilla_animacion(datos):
+    if not isinstance(datos, dict) or set(datos) != {"fotogramas"}:
+        raise ValidationError("La plantilla de animación contiene datos inválidos.")
+    objeto = {
+        "id": "plantilla", "texto": "", "x": 0, "y": 0, "ancho": 100, "alto": 100,
+        "fuente": "Poppins", "tamano": 36, "color": "#000000", "negrita": False,
+        "cursiva": False, "subrayado": False, "alineacion": "left",
+        "fotogramas": datos["fotogramas"],
+    }
+    try:
+        validar_objetos([objeto])
+    except ValidationError as error:
+        raise ValidationError("La plantilla de animación contiene datos inválidos.") from error
+
+
 def validar_objetos(objetos):
     """Valida cuadros de texto e imágenes para una escena de 800 x 450."""
     def invalid():
@@ -123,7 +227,7 @@ def validar_objetos(objetos):
         if not isinstance(item, dict):
             invalid()
         image_object = item.get("tipo") == "imagen"
-        expected_keys = keys | {"tipo", "imagen"} if image_object else keys
+        expected_keys = keys | {"tipo", "imagen"} if image_object else set(keys)
         if "animacion" in item:
             expected_keys.add("animacion")
         if set(item) != expected_keys or ("tipo" in item and not image_object):
@@ -147,7 +251,7 @@ def validar_objetos(objetos):
             value = item[field]
             if type(value) not in (int, float) or not low <= value <= high or not math.isfinite(value):
                 invalid()
-        if item["fuente"] not in ("Poppins", "Arial") or item["alineacion"] not in ("left", "center", "right"):
+        if item["fuente"] not in FONT_FAMILIES or item["alineacion"] not in ("left", "center", "right"):
             invalid()
         if not isinstance(item["color"], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", item["color"]):
             invalid()
@@ -158,9 +262,17 @@ def validar_objetos(objetos):
             invalid()
         previous = -1
         for key in frames:
-            if not isinstance(key, dict) or set(key) != {"frame", "x", "y", "giro", "opacidad", "interpolacion"}:
+            required_keyframe_keys = {"frame", "x", "y", "giro", "opacidad", "interpolacion"}
+            optional_keyframe_keys = {
+                "ancho", "alto", "color", "tamano", "texto", "fuente", "bezier", "texto_modo",
+            }
+            if (
+                not isinstance(key, dict)
+                or not required_keyframe_keys.issubset(key)
+                or not set(key).issubset(required_keyframe_keys | optional_keyframe_keys)
+            ):
                 invalid()
-            if type(key["frame"]) is not int or not previous < key["frame"] <= 3600:
+            if type(key["frame"]) is not int or not previous < key["frame"] <= MAX_SLIDE_FRAMES:
                 invalid()
             previous = key["frame"]
             for field, low, high in [
@@ -172,5 +284,31 @@ def validar_objetos(objetos):
                 value = key[field]
                 if type(value) not in (int, float) or not low <= value <= high or not math.isfinite(value):
                     invalid()
-            if key["interpolacion"] not in ("lineal", "suave"):
+            for field, low, high in (("ancho", 60, MAX_OBJECT_WIDTH), ("alto", 30, MAX_OBJECT_HEIGHT), ("tamano", 8, 120)):
+                if field in key:
+                    value = key[field]
+                    if type(value) not in (int, float) or not low <= value <= high or not math.isfinite(value):
+                        invalid()
+            if "color" in key and (
+                not isinstance(key["color"], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", key["color"])
+            ):
+                invalid()
+            if "texto" in key and (not isinstance(key["texto"], str) or len(key["texto"]) > 5000):
+                invalid()
+            if "fuente" in key and key["fuente"] not in FONT_FAMILIES:
+                invalid()
+            if "texto_modo" in key and key["texto_modo"] not in TEXT_TRANSITIONS:
+                invalid()
+            if key["interpolacion"] not in KEYFRAME_INTERPOLATIONS:
+                invalid()
+            bezier = key.get("bezier")
+            if key["interpolacion"] == "bezier":
+                if (
+                    not isinstance(bezier, list) or len(bezier) != 4
+                    or any(type(value) not in (int, float) or not math.isfinite(value) for value in bezier)
+                    or not 0 <= bezier[0] <= 1 or not 0 <= bezier[2] <= 1
+                    or not all(-2 <= value <= 2 for value in (bezier[1], bezier[3]))
+                ):
+                    invalid()
+            elif bezier is not None:
                 invalid()
