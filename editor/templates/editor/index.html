@@ -12,7 +12,7 @@
     <!-- Fuente Poppins -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=2">
-    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=36">
+    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=42">
 </head>
 <body class="h-screen flex flex-col bg-[#f3f4f6] overflow-hidden text-gray-700">
 
@@ -49,9 +49,18 @@
                 <summary aria-label="Menú de cuenta" title="Menú de cuenta">
                     <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
                 </summary>
-                <form method="post" action="{% url 'logout' %}">
-                    {% csrf_token %}<button type="submit">Cerrar sesión</button>
-                </form>
+                <div class="account-menu-items">
+                    <div class="account-menu-identity">
+                        <strong>{{ user.email|default:user.username }}</strong>
+                        {% if user.perfil_institucional %}<small>{{ user.perfil_institucional.rol.nombre }}</small>{% endif %}
+                    </div>
+                    {% if user.is_staff %}
+                    <a class="admin-menu-link" href="{% url 'editor:administracion' %}"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Panel de administración</a>
+                    {% endif %}
+                    <form method="post" action="{% url 'logout' %}">
+                        {% csrf_token %}<button type="submit"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i> Cerrar sesión</button>
+                    </form>
+                </div>
             </details>
             <details class="share-menu">
                 <summary aria-label="Compartir y exportar"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i><span>Compartir</span></summary>
@@ -166,15 +175,47 @@
                 data-status-url="{% url 'editor:estado_ia' proyecto.pk %}"
                 data-generate-url="{% url 'editor:generar_ia' proyecto.pk %}"
                 data-document-upload-url="{% url 'editor:subir_documento_ia' proyecto.pk %}" hidden>
-                <div id="ai-connection" class="ai-connection" role="status" aria-live="polite">
-                    <span class="ai-status-dot" aria-hidden="true"></span>
-                    <span id="ai-connection-text">Comprobando Gemini…</span>
+                <section class="ai-hero" aria-labelledby="ai-hero-title">
+                    <span class="ai-hero-icon" aria-hidden="true"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
+                    <div>
+                        <span class="ai-eyebrow">Impulsado por Gemini</span>
+                        <h3 id="ai-hero-title">Tu estudio creativo</h3>
+                        <p>Transforma ideas y documentos sin salir del editor.</p>
+                    </div>
+                </section>
+                <section class="ai-status-card" aria-label="Estado de Gemini">
+                    <div id="ai-connection" class="ai-connection" role="status" aria-live="polite">
+                        <span class="ai-status-dot" aria-hidden="true"></span>
+                        <span id="ai-connection-text">Comprobando Gemini…</span>
+                    </div>
+                    <div class="ai-quota-heading">
+                        <p id="ai-quota" class="ai-quota"></p>
+                        <span id="ai-quota-percent" class="ai-quota-percent">0%</span>
+                    </div>
+                    <div id="ai-quota-meter" class="ai-quota-meter" role="progressbar" aria-label="Uso diario de tokens" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                        <span id="ai-quota-bar"></span>
+                    </div>
+                </section>
+                <p class="ai-privacy"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> <span>Tu clave se mantiene segura en el servidor.</span></p>
+                <div id="ai-loading-screen" class="ai-loading-screen" role="status" aria-live="assertive" aria-atomic="true" tabindex="-1" hidden>
+                    <div class="ai-loading-card">
+                        <div class="ai-loading-visual" aria-hidden="true">
+                            <span class="ai-loading-ring"></span>
+                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        </div>
+                        <strong id="ai-loading-title">Gemini está preparando tu contenido…</strong>
+                        <p>Estamos procesando tu solicitud. Esto puede tardar unos segundos.</p>
+                        <span class="ai-loading-progress" aria-hidden="true"><span></span></span>
+                        <small>Mantén esta ventana abierta mientras termina.</small>
+                    </div>
                 </div>
-                <p id="ai-quota" class="ai-quota"></p>
-                <p class="ai-privacy"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> La clave permanece en el servidor. No se incluye en el proyecto ni en el navegador.</p>
 
                 <details class="ai-card" open>
-                    <summary>Convertir PDF o PowerPoint</summary>
+                    <summary>
+                        <span class="ai-card-icon ai-card-icon-document" aria-hidden="true"><i class="fa-solid fa-file-arrow-up"></i></span>
+                        <span class="ai-card-copy"><strong>Convertir documento</strong><small>PDF o PowerPoint a diapositivas</small></span>
+                        <i class="fa-solid fa-chevron-down ai-card-chevron" aria-hidden="true"></i>
+                    </summary>
                     <div class="ai-card-body">
                         <p class="ai-document-help">Gemini reorganiza el contenido en diapositivas editables. PDF o PPTX, máximo 50 MB.</p>
                         <label for="ai-document-file">Documento
@@ -193,7 +234,7 @@
                         </div>
                         <label for="ai-document-audience">Audiencia</label>
                         <input id="ai-document-audience" type="text" maxlength="120" value="Estudiantes universitarios">
-                        <button id="ai-convert-document" class="ai-primary" type="button">Convertir documento</button>
+                        <button id="ai-convert-document" class="ai-primary" type="button"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Convertir documento</button>
                         <div id="ai-document-job" class="ai-document-job" hidden>
                             <div class="ai-document-status-line">
                                 <strong id="ai-document-filename"></strong>
@@ -215,7 +256,11 @@
                 </details>
 
                 <details class="ai-card">
-                    <summary>Crear presentación</summary>
+                    <summary>
+                        <span class="ai-card-icon ai-card-icon-presentation" aria-hidden="true"><i class="fa-solid fa-display"></i></span>
+                        <span class="ai-card-copy"><strong>Crear presentación</strong><small>Genera una estructura desde una idea</small></span>
+                        <i class="fa-solid fa-chevron-down ai-card-chevron" aria-hidden="true"></i>
+                    </summary>
                     <div class="ai-card-body">
                         <label for="ai-presentation-topic">Tema e indicaciones</label>
                         <textarea id="ai-presentation-topic" maxlength="5000" rows="4" placeholder="Ej. Explica la fotosíntesis con ejemplos para bachillerato"></textarea>
@@ -232,7 +277,7 @@
                         </div>
                         <label for="ai-audience">Audiencia</label>
                         <input id="ai-audience" type="text" maxlength="120" value="Estudiantes universitarios">
-                        <button id="ai-generate-presentation" class="ai-primary" type="button">Generar estructura</button>
+                        <button id="ai-generate-presentation" class="ai-primary" type="button"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generar estructura</button>
                         <div id="ai-presentation-result" class="ai-result" hidden>
                             <strong id="ai-presentation-title"></strong>
                             <ol id="ai-presentation-preview"></ol>
@@ -242,7 +287,11 @@
                 </details>
 
                 <details class="ai-card">
-                    <summary>Asistente de texto</summary>
+                    <summary>
+                        <span class="ai-card-icon ai-card-icon-text" aria-hidden="true"><i class="fa-solid fa-pen-nib"></i></span>
+                        <span class="ai-card-copy"><strong>Asistente de texto</strong><small>Resume, mejora y crea guiones</small></span>
+                        <i class="fa-solid fa-chevron-down ai-card-chevron" aria-hidden="true"></i>
+                    </summary>
                     <div class="ai-card-body">
                         <label for="ai-text-action">Tarea</label>
                         <select id="ai-text-action">
@@ -255,7 +304,7 @@
                         <textarea id="ai-text-source" maxlength="15000" rows="5" placeholder="Selecciona un texto del lienzo o escríbelo aquí"></textarea>
                         <label for="ai-text-instruction">Indicaciones opcionales</label>
                         <textarea id="ai-text-instruction" maxlength="2000" rows="2" placeholder="Ej. Usa lenguaje sencillo y conserva las fechas"></textarea>
-                        <button id="ai-generate-text" class="ai-primary" type="button">Procesar texto</button>
+                        <button id="ai-generate-text" class="ai-primary" type="button"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Procesar texto</button>
                         <div id="ai-text-result" class="ai-result" hidden>
                             <textarea id="ai-text-output" rows="7" readonly></textarea>
                             <button id="ai-apply-text" type="button">Aplicar al objeto seleccionado</button>
@@ -269,7 +318,11 @@
                 </details>
 
                 <details class="ai-card">
-                    <summary>Generar imagen o diagrama</summary>
+                    <summary>
+                        <span class="ai-card-icon ai-card-icon-image" aria-hidden="true"><i class="fa-regular fa-image"></i></span>
+                        <span class="ai-card-copy"><strong>Crear recurso visual</strong><small>Imágenes, diagramas e infografías</small></span>
+                        <i class="fa-solid fa-chevron-down ai-card-chevron" aria-hidden="true"></i>
+                    </summary>
                     <div class="ai-card-body">
                         <label for="ai-image-prompt">Descripción</label>
                         <textarea id="ai-image-prompt" maxlength="2000" rows="4" placeholder="Describe el contenido visual, etiquetas y estilo"></textarea>
@@ -289,7 +342,7 @@
                                 </select>
                             </label>
                         </div>
-                        <button id="ai-generate-image" class="ai-primary" type="button">Generar imagen</button>
+                        <button id="ai-generate-image" class="ai-primary" type="button"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generar imagen</button>
                         <div id="ai-image-result" class="ai-result" hidden>
                             <img id="ai-image-preview" alt="Vista previa de la imagen generada con Gemini">
                             <button id="ai-apply-image" type="button">Agregar a la diapositiva</button>
@@ -330,6 +383,16 @@
                     <p id="selected-audio-name">Sin pista seleccionada</p>
                     <audio id="selected-audio-preview" controls preload="metadata" hidden></audio>
                     <button id="clear-audio" class="clear-background" type="button" disabled>Quitar pista de la diapositiva</button>
+                </section>
+                <section class="audio-scope-card" aria-labelledby="audio-scope-title">
+                    <div class="audio-scope-heading">
+                        <span aria-hidden="true"><i class="fa-solid fa-layer-group"></i></span>
+                        <div><h3 id="audio-scope-title">Toda la presentación</h3><p id="audio-scope-summary">Selecciona una pista para aplicarla a todas las diapositivas.</p></div>
+                    </div>
+                    <button id="apply-audio-all" class="audio-apply-all" type="button" disabled><i class="fa-solid fa-check-double" aria-hidden="true"></i> Aplicar a todas las diapositivas</button>
+                    <button id="remove-audio-all" class="audio-remove-all" type="button" disabled>Quitar esta pista de todas</button>
+                    <p id="audio-scope-message" class="audio-scope-message" role="status" aria-live="polite"></p>
+                    <small>No reemplaza otras pistas. Las diapositivas que ya tengan tres audios se omitirán.</small>
                 </section>
                 <h3 class="asset-section-title">Mis audios</h3>
                 <div id="uploaded-audio-list" class="audio-list" aria-live="polite"></div>
@@ -434,11 +497,42 @@
                 <div id="stage-viewport">
                     <div id="stage" class="canvas-bg" data-asset-base="{% static 'editor/images/' %}" data-uploaded-image-base="{% url 'editor:imagenes_subidas' %}" data-uploaded-audio-base="{% url 'editor:audios_subidos' %}" aria-label="Lienzo de animación" tabindex="0"></div>
                 </div>
-                <div id="presentation-controls" class="presentation-controls" hidden>
-                    <button id="exit-presentation" type="button">Salir</button>
-                    <button id="previous-slide" type="button" aria-label="Diapositiva anterior">←</button>
-                    <span id="presentation-count"></span>
-                    <button id="next-slide" type="button" aria-label="Diapositiva siguiente">→</button>
+                <div id="presentation-chrome" class="presentation-chrome" hidden>
+                    <div id="presentation-progress" class="presentation-progress" role="progressbar" aria-label="Progreso de la presentación" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                        <span id="presentation-progress-bar"></span>
+                    </div>
+                    <header class="presentation-topbar">
+                        <div class="presentation-identity">
+                            <span class="presentation-brand" aria-hidden="true"><i class="fa-solid fa-play"></i></span>
+                            <span>
+                                <small>Modo presentación</small>
+                                <strong id="presentation-project-name">{{ proyecto.nombre }}</strong>
+                            </span>
+                        </div>
+                        <div class="presentation-top-actions">
+                            <span id="presentation-playback-state" class="presentation-playback-state"><i class="fa-solid fa-circle-play" aria-hidden="true"></i> Reproduciendo</span>
+                            <button id="exit-presentation" class="presentation-exit" type="button" aria-label="Salir de la presentación">
+                                <i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Salir</span>
+                            </button>
+                        </div>
+                    </header>
+                    <div class="presentation-bottom">
+                        <p id="presentation-hint" class="presentation-hint">Usa ← y → para navegar · Esc para salir</p>
+                        <nav id="presentation-controls" class="presentation-controls" aria-label="Controles de presentación">
+                            <button id="previous-slide" class="presentation-nav-button" type="button" aria-label="Diapositiva anterior">
+                                <i class="fa-solid fa-arrow-left" aria-hidden="true"></i><span>Anterior</span>
+                            </button>
+                            <button id="toggle-presentation-play" class="presentation-play-toggle" type="button" aria-label="Pausar presentación">
+                                <i class="fa-solid fa-pause" aria-hidden="true"></i>
+                            </button>
+                            <span class="presentation-position" aria-label="Posición en la presentación">
+                                <strong id="presentation-count"></strong><small>diapositivas</small>
+                            </span>
+                            <button id="next-slide" class="presentation-nav-button" type="button" aria-label="Diapositiva siguiente">
+                                <span>Siguiente</span><i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                            </button>
+                        </nav>
+                    </div>
                 </div>
             </div>
             <section id="timeline-panel" class="timeline-panel" hidden
@@ -562,6 +656,6 @@
     </div>
     <span id="object-count" class="sr-only"></span>
     {{ objetos|json_script:"scene-data" }}
-    <script src="{% static 'editor/js/editor.js' %}?v=38" defer></script>
+    <script src="{% static 'editor/js/editor.js' %}?v=42" defer></script>
 </body>
 </html>

@@ -133,6 +133,7 @@
     let slideClipboard = null;
     let playbackTimer = null;
     let playbackRequest = null;
+    let presentationChromeTimer = null;
     let timelineRunning = false;
     let currentFrame = 0;
     let playbackStartedAt = 0;
@@ -164,6 +165,8 @@
     let aiDocumentResult = null;
     let activeDocumentJob = null;
     let documentPollTimer = null;
+    let aiRequestPending = false;
+    let aiLoadingReturnFocus = null;
     const current = () => objects.find(obj => obj.id === selected);
     const node = id => [...stage.children].find(el => el.dataset.id === id);
     const objectRotation = obj => evaluateObject(obj, $("timeline-panel").hidden ? 0 : currentFrame).giro || 0;
@@ -535,6 +538,7 @@
         const bounded = clamp(currentFrame, 0, duration);
         $("timeline-time").textContent = `${String(Math.floor(bounded / FPS / 60)).padStart(2, "0")}:${String(Math.floor(bounded / FPS) % 60).padStart(2, "0")}.${String(Math.round((bounded % FPS) / FPS * 100)).padStart(2, "0")} · F${Math.round(bounded)}`;
         $("timeline-playhead").style.left = `${150 + bounded / FPS * timelinePixelsPerSecond}px`;
+        updatePresentationProgress();
     }
 
     function setTimelineFrame(frame, seekAudio = true) {
@@ -1283,7 +1287,33 @@
 
     function setAIGenerationDisabled(disabled) {
         document.querySelectorAll(".ai-primary").forEach(button => {
-            button.disabled = disabled;
+            const documentIsActive = button.id === "ai-convert-document"
+                && ["pendiente", "procesando"].includes(activeDocumentJob?.status);
+            button.disabled = disabled || aiRequestPending || documentIsActive;
+        });
+    }
+
+    function setAILoading(loading, message = "", trigger = null) {
+        const screen = $("ai-loading-screen");
+        const gallery = document.querySelector('[data-gallery="ia"]');
+        aiRequestPending = loading;
+        screen.hidden = !loading;
+        gallery.setAttribute("aria-busy", String(loading));
+        document.body.classList.toggle("ai-request-pending", loading);
+        if (loading) {
+            aiLoadingReturnFocus = trigger || document.activeElement;
+            $("ai-loading-title").textContent = message || "Gemini está preparando tu contenido…";
+            setAIGenerationDisabled(true);
+            requestAnimationFrame(() => screen.focus({preventScroll: true}));
+            return;
+        }
+        setAIGenerationDisabled(!aiCanGenerate);
+        const returnFocus = aiLoadingReturnFocus;
+        aiLoadingReturnFocus = null;
+        requestAnimationFrame(() => {
+            if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+                returnFocus.focus({preventScroll: true});
+            }
         });
     }
 
@@ -1298,6 +1328,10 @@
         const quota = state.quota || {used: 0, limit: 0, remaining: 0};
         const roleName = state.role?.name || "Cuenta";
         $("ai-quota").textContent = `${roleName} · uso de hoy: ${Number(quota.used).toLocaleString("es-MX")} / ${Number(quota.limit).toLocaleString("es-MX")} tokens`;
+        const quotaPercent = quota.limit > 0 ? clamp(quota.used / quota.limit * 100, 0, 100) : 0;
+        $("ai-quota-percent").textContent = `${Math.round(quotaPercent)}%`;
+        $("ai-quota-bar").style.width = `${quotaPercent}%`;
+        $("ai-quota-meter").setAttribute("aria-valuenow", String(Math.round(quotaPercent)));
         aiCanGenerate = aiConfigured && quota.remaining > 0;
         setAIGenerationDisabled(!aiCanGenerate);
         if (state.conversion) renderDocumentConversion(state.conversion);
@@ -1324,8 +1358,10 @@
     }
 
     async function requestAI(payload, button, progressMessage) {
+        if (aiRequestPending) return null;
         const gallery = document.querySelector('[data-gallery="ia"]');
-        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        setAILoading(true, progressMessage, button);
         setAIMessage(progressMessage);
         try {
             const response = await fetch(gallery.dataset.generateUrl, {
@@ -1346,7 +1382,8 @@
             setAIMessage(error.message, true);
             return null;
         } finally {
-            button.disabled = !aiCanGenerate;
+            button.removeAttribute("aria-busy");
+            setAILoading(false);
         }
     }
 
@@ -1472,7 +1509,7 @@
         $("ai-document-status").textContent = job.error || job.message;
         $("ai-cancel-document").hidden = !active;
         $("ai-retry-document").hidden = !["fallido", "cancelado"].includes(job.status);
-        $("ai-convert-document").disabled = active || !aiCanGenerate;
+        $("ai-convert-document").disabled = active || !aiCanGenerate || aiRequestPending;
 
         const resultContainer = $("ai-document-result");
         if (job.status === "completado" && job.presentation) {
@@ -1495,6 +1532,7 @@
     }
 
     async function convertAIDocument() {
+        if (aiRequestPending) return;
         const input = $("ai-document-file");
         const file = input.files[0];
         if (!file) {
@@ -1512,7 +1550,8 @@
         payload.append("slide_count", $("ai-document-slide-count").value);
         payload.append("audience", $("ai-document-audience").value);
         payload.append("style", $("ai-document-style").value);
-        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        setAILoading(true, "Gemini está preparando tu documento…", button);
         setAIMessage("Subiendo el documento de forma privada…");
         try {
             const response = await fetch(gallery.dataset.documentUploadUrl, {
@@ -1530,6 +1569,8 @@
         } catch (error) {
             setAIMessage(error.message, true);
         } finally {
+            button.removeAttribute("aria-busy");
+            setAILoading(false);
             button.disabled = ["pendiente", "procesando"].includes(activeDocumentJob?.status) || !aiCanGenerate;
         }
     }
@@ -1772,6 +1813,94 @@
         document.querySelectorAll("[data-audio-path]").forEach(button => {
             button.setAttribute("aria-pressed", String(activeAudios.some(track => track.path === button.dataset.audioPath)));
         });
+        updateAudioScopeControls(selectedTrack);
+    }
+
+    function updateAudioScopeControls(selectedTrack = activeAudios.find(track => track.id === selectedAudioTrackId)) {
+        const applyButton = $("apply-audio-all");
+        const removeButton = $("remove-audio-all");
+        const summary = $("audio-scope-summary");
+        if (!selectedTrack) {
+            applyButton.disabled = true;
+            removeButton.disabled = true;
+            summary.textContent = "Selecciona una pista para aplicarla a todas las diapositivas.";
+            return;
+        }
+        const assignedSlides = slides.filter(slide =>
+            (slide.audios || []).some(track => track.path === selectedTrack.path)
+        ).length;
+        summary.textContent = assignedSlides === slides.length
+            ? `Esta pista está en las ${slides.length} diapositivas.`
+            : `Esta pista está en ${assignedSlides} de ${slides.length} diapositivas.`;
+        applyButton.disabled = assignedSlides === slides.length;
+        removeButton.disabled = assignedSlides === 0;
+    }
+
+    function applySelectedAudioToAllSlides() {
+        const selectedTrack = activeAudios.find(track => track.id === selectedAudioTrackId);
+        if (!selectedTrack) return;
+        storeCurrentSlide();
+        let added = 0;
+        let full = 0;
+        for (const slide of slides) {
+            slide.audios ||= [];
+            if (slide.audios.some(track => track.path === selectedTrack.path)) continue;
+            if (slide.audios.length >= 3) {
+                full += 1;
+                continue;
+            }
+            const copy = {
+                ...selectedTrack,
+                id: crypto.randomUUID(),
+                inicio_frame: 0,
+            };
+            slide.audios.push(copy);
+            slide.audio = slide.audios[0]?.path || "";
+            if (copy.recorte_fin !== null) {
+                const endFrame = Math.round(Math.max(0, copy.recorte_fin - copy.recorte_inicio) * FPS);
+                slide.duracion_frames = clamp(Math.max(slide.duracion_frames, endFrame), 30, MAX_SLIDE_FRAMES);
+            }
+            added += 1;
+        }
+        activeAudios = slides[activeSlideIndex].audios;
+        selectedAudioTrackId = activeAudios.find(track => track.path === selectedTrack.path)?.id || null;
+        $("slide-duration").value = String(Math.round(slides[activeSlideIndex].duracion_frames / FPS));
+        $("audio-scope-message").textContent = full
+            ? `Se agregó a ${added} diapositiva${added === 1 ? "" : "s"}; ${full} se omitieron porque ya tienen tres pistas.`
+            : added
+                ? `Pista aplicada a ${slides.length} diapositiva${slides.length === 1 ? "" : "s"}.`
+                : "La pista ya estaba aplicada en todas las diapositivas.";
+        $("audio-scope-message").classList.toggle("warning", full > 0);
+        updateSelectedAudio();
+        renderAudioMixer();
+        renderTimeline();
+        renderSlideList();
+        sync();
+        commitHistory();
+    }
+
+    function removeSelectedAudioFromAllSlides() {
+        const selectedTrack = activeAudios.find(track => track.id === selectedAudioTrackId);
+        if (!selectedTrack) return;
+        storeCurrentSlide();
+        let removed = 0;
+        for (const slide of slides) {
+            const previousLength = (slide.audios || []).length;
+            slide.audios = (slide.audios || []).filter(track => track.path !== selectedTrack.path);
+            removed += previousLength - slide.audios.length;
+            slide.audio = slide.audios[0]?.path || "";
+        }
+        stopAudioPlayers();
+        activeAudios = slides[activeSlideIndex].audios;
+        selectedAudioTrackId = activeAudios[0]?.id || null;
+        $("audio-scope-message").textContent = `Pista retirada de ${removed} diapositiva${removed === 1 ? "" : "s"}.`;
+        $("audio-scope-message").classList.remove("warning");
+        updateSelectedAudio();
+        renderAudioMixer();
+        renderTimeline();
+        renderSlideList();
+        sync();
+        commitHistory();
     }
 
     function hydrateAudioTrack(track) {
@@ -2360,6 +2489,7 @@
         $("timeline-play").innerHTML = '<i class="fa-solid fa-play" aria-hidden="true"></i>';
         $("timeline-play").setAttribute("aria-label", "Reproducir");
         $("timeline-play").title = "Reproducir";
+        if (playing) updatePresentationPlaybackUI();
     }
 
     function playbackTick(now) {
@@ -2377,6 +2507,9 @@
                 setTimelineFrame(marker.frame, false);
                 pauseTimeline();
                 node(marker.objeto_id)?.classList.add("click-wait-target");
+                document.body.classList.add("presentation-awaiting-click");
+                updatePresentationPlaybackUI();
+                revealPresentationChrome(true);
                 return;
             }
         }
@@ -2416,6 +2549,7 @@
         $("timeline-play").innerHTML = '<i class="fa-solid fa-pause" aria-hidden="true"></i>';
         $("timeline-play").setAttribute("aria-label", "Pausar");
         $("timeline-play").title = "Pausar";
+        if (playing) updatePresentationPlaybackUI();
         syncAudioPlayers(currentFrame, true);
         playbackRequest = requestAnimationFrame(playbackTick);
     }
@@ -2424,7 +2558,9 @@
         if (!waitingMarker) return;
         node(waitingMarker.objeto_id)?.classList.remove("click-wait-target");
         waitingMarker = null;
+        document.body.classList.remove("presentation-awaiting-click");
         startTimeline();
+        revealPresentationChrome();
     }
 
     function presetFrames(obj, preset, startFrame) {
@@ -2599,6 +2735,8 @@
         event.target.value = "";
     });
     $("clear-audio").addEventListener("click", removeSelectedAudioTrack);
+    $("apply-audio-all").addEventListener("click", applySelectedAudioToAllSlides);
+    $("remove-audio-all").addEventListener("click", removeSelectedAudioFromAllSlides);
     $("selected-audio-preview").addEventListener("play", event => {
         document.querySelectorAll(".audio-item audio").forEach(audio => {
             if (audio !== event.currentTarget) audio.pause();
@@ -2804,39 +2942,117 @@
         sync();
     }
 
+    function updatePresentationProgress() {
+        if (!playing) return;
+        const totalFrames = slides.reduce((total, slide) => total + slide.duracion_frames, 0);
+        const previousFrames = slides.slice(0, activeSlideIndex)
+            .reduce((total, slide) => total + slide.duracion_frames, 0);
+        const progress = totalFrames ? clamp((previousFrames + currentFrame) / totalFrames, 0, 1) : 0;
+        $("presentation-progress-bar").style.transform = `scaleX(${progress})`;
+        $("presentation-progress").setAttribute("aria-valuenow", String(Math.round(progress * 100)));
+    }
+
+    function updatePresentationNavigation(index = activeSlideIndex) {
+        const previous = $("previous-slide");
+        const next = $("next-slide");
+        const lastSlide = index === slides.length - 1;
+        previous.disabled = index === 0;
+        next.setAttribute("aria-label", lastSlide ? "Finalizar presentación" : "Diapositiva siguiente");
+        next.querySelector("span").textContent = lastSlide ? "Finalizar" : "Siguiente";
+        next.querySelector("i").className = lastSlide ? "fa-solid fa-flag-checkered" : "fa-solid fa-arrow-right";
+        $("presentation-count").textContent = `${index + 1} / ${slides.length}`;
+    }
+
+    function updatePresentationPlaybackUI() {
+        if (!playing) return;
+        const toggle = $("toggle-presentation-play");
+        const state = $("presentation-playback-state");
+        if (waitingMarker) {
+            toggle.innerHTML = '<i class="fa-solid fa-hand-pointer" aria-hidden="true"></i>';
+            toggle.setAttribute("aria-label", "Esperando interacción con la diapositiva");
+            state.innerHTML = '<i class="fa-solid fa-hand-pointer" aria-hidden="true"></i> Interacción';
+            $("presentation-hint").textContent = "Haz clic en el elemento resaltado para continuar";
+        } else if (timelineRunning) {
+            toggle.innerHTML = '<i class="fa-solid fa-pause" aria-hidden="true"></i>';
+            toggle.setAttribute("aria-label", "Pausar presentación");
+            state.innerHTML = '<i class="fa-solid fa-circle-play" aria-hidden="true"></i> Reproduciendo';
+            $("presentation-hint").textContent = "Usa ← y → para navegar · Espacio para pausar · Esc para salir";
+        } else {
+            toggle.innerHTML = '<i class="fa-solid fa-play" aria-hidden="true"></i>';
+            toggle.setAttribute("aria-label", "Reanudar presentación");
+            state.innerHTML = '<i class="fa-solid fa-circle-pause" aria-hidden="true"></i> En pausa';
+            $("presentation-hint").textContent = "Presentación en pausa · Pulsa espacio para continuar";
+        }
+    }
+
+    function revealPresentationChrome(keepVisible = false) {
+        if (!playing) return;
+        clearTimeout(presentationChromeTimer);
+        presentationChromeTimer = null;
+        document.body.classList.remove("presentation-ui-hidden");
+        if (keepVisible || waitingMarker) return;
+        presentationChromeTimer = setTimeout(() => {
+            if (!playing || waitingMarker) return;
+            document.body.classList.add("presentation-ui-hidden");
+        }, 2800);
+    }
+
+    function togglePresentationPlayback() {
+        if (!playing) return;
+        if (waitingMarker) {
+            node(waitingMarker.objeto_id)?.focus({preventScroll: true});
+            revealPresentationChrome(true);
+            return;
+        }
+        if (timelineRunning) pauseTimeline();
+        else startTimeline();
+        revealPresentationChrome();
+    }
+
     function enterPresentation(index = activeSlideIndex) {
         if (playing) return;
         document.querySelectorAll(".audio-item audio, #selected-audio-preview").forEach(audio => audio.pause());
         playing = true;
+        $("presentation-project-name").textContent = form.elements.nombre.value || "Presentación";
         document.body.classList.add("presenting");
-        $("presentation-controls").hidden = false;
+        document.body.classList.remove("presentation-ui-hidden", "presentation-awaiting-click");
+        $("presentation-chrome").hidden = false;
         showPresentationSlide(index);
+        stage.focus({preventScroll: true});
+        revealPresentationChrome();
     }
 
     function showPresentationSlide(index) {
-        if (index < 0 || index >= slides.length) {
+        if (index < 0) return;
+        if (index >= slides.length) {
             exitPresentation();
             return;
         }
         pauseTimeline();
         stopAudioPlayers();
+        if (waitingMarker) node(waitingMarker.objeto_id)?.classList.remove("click-wait-target");
+        document.body.classList.remove("presentation-awaiting-click");
         showSlide(index);
-        $("presentation-count").textContent = `${index + 1} / ${slides.length}`;
+        updatePresentationNavigation(index);
         consumedMarkers = new Set();
         waitingMarker = null;
         setTimelineFrame(0, false);
         startTimeline();
+        revealPresentationChrome();
     }
 
     function exitPresentation() {
+        clearTimeout(presentationChromeTimer);
+        presentationChromeTimer = null;
         pauseTimeline();
         stopAudioPlayers();
         if (waitingMarker) node(waitingMarker.objeto_id)?.classList.remove("click-wait-target");
         waitingMarker = null;
         playing = false;
-        document.body.classList.remove("presenting");
-        $("presentation-controls").hidden = true;
+        document.body.classList.remove("presenting", "presentation-ui-hidden", "presentation-awaiting-click");
+        $("presentation-chrome").hidden = true;
         setTimelineFrame(0, false);
+        $("present-button").focus({preventScroll: true});
     }
 
     function setTextColor(color) {
@@ -2857,6 +3073,14 @@
     $("edit-text").addEventListener("click", edit);
     $("images-tool").addEventListener("click", event => showGallery("imagenes", event.currentTarget));
     $("ai-tool").addEventListener("click", event => showGallery("ia", event.currentTarget));
+    document.querySelectorAll("details.ai-card").forEach(card => {
+        card.addEventListener("toggle", () => {
+            if (!card.open) return;
+            document.querySelectorAll("details.ai-card").forEach(other => {
+                if (other !== card) other.open = false;
+            });
+        });
+    });
     $("elements-tool").addEventListener("click", event => showGallery("elementos", event.currentTarget));
     $("background-tool").addEventListener("click", event => showGallery("fondos", event.currentTarget));
     $("audio-tool").addEventListener("click", event => showGallery("audios", event.currentTarget));
@@ -2908,10 +3132,28 @@
     $("font-color").addEventListener("input", event => setTextColor(event.target.value));
     $("present-button").addEventListener("click", () => enterPresentation());
     $("exit-presentation").addEventListener("click", exitPresentation);
-    $("previous-slide").addEventListener("click", () => showPresentationSlide(activeSlideIndex - 1));
+    $("previous-slide").addEventListener("click", () => {
+        if (activeSlideIndex > 0) showPresentationSlide(activeSlideIndex - 1);
+    });
     $("next-slide").addEventListener("click", () => showPresentationSlide(activeSlideIndex + 1));
+    $("toggle-presentation-play").addEventListener("click", togglePresentationPlayback);
+    $("presentation-chrome").addEventListener("focusin", event => {
+        revealPresentationChrome(event.target instanceof HTMLElement && event.target.matches(":focus-visible"));
+    });
+    $("presentation-chrome").addEventListener("focusout", () => revealPresentationChrome());
+    window.addEventListener("pointermove", () => {
+        if (playing) revealPresentationChrome();
+    });
+    window.addEventListener("pointerdown", () => {
+        if (playing) revealPresentationChrome();
+    });
     window.addEventListener("keydown", event => {
+        if (aiRequestPending) {
+            event.preventDefault();
+            return;
+        }
         if (playing) {
+            revealPresentationChrome();
             if (event.key === "Escape") {
                 event.preventDefault();
                 exitPresentation();
@@ -2920,7 +3162,10 @@
                 showPresentationSlide(activeSlideIndex + 1);
             } else if (event.key === "ArrowLeft") {
                 event.preventDefault();
-                showPresentationSlide(activeSlideIndex - 1);
+                if (activeSlideIndex > 0) showPresentationSlide(activeSlideIndex - 1);
+            } else if (event.key === " " && !(event.target instanceof HTMLButtonElement)) {
+                event.preventDefault();
+                togglePresentationPlayback();
             }
             return;
         }
@@ -2977,6 +3222,7 @@
         if (event.target === stage) select(null);
     });
     stage.addEventListener("keydown", event => {
+        if (playing) return;
         const obj = current();
         if (!obj) return;
         if (editing) {
@@ -3096,9 +3342,11 @@
     const area = stage.parentElement.parentElement;
     new ResizeObserver(() => {
         const compact = window.matchMedia("(max-width: 760px), (max-height: 600px) and (max-width: 950px)").matches;
+        const horizontalInset = playing ? (compact ? 16 : 96) : (compact ? 16 : 48);
+        const verticalInset = playing ? (compact ? 130 : 180) : (compact ? 60 : 100);
         scale = Math.min(
-            Math.max(100, area.clientWidth - (compact ? 16 : 48)) / 800,
-            Math.max(100, area.clientHeight - (compact ? 60 : 100)) / 450
+            Math.max(100, area.clientWidth - horizontalInset) / 800,
+            Math.max(100, area.clientHeight - verticalInset) / 450
         );
         $("stage-viewport").style.width = `${800 * scale}px`;
         $("stage-viewport").style.height = `${450 * scale}px`;

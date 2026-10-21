@@ -109,9 +109,11 @@ muestra al escribir y no debe añadirse al código ni a este archivo.
 Quienes usarán el editor pueden crear su propia cuenta desde **Regístrate aquí**
 en la pantalla de inicio de sesión, o abrir `/cuentas/registro/`. Se exige correo
 `@comunidad.unam.mx`; el número de cuenta es opcional y también sirve para iniciar
-sesión. Django valida y guarda la contraseña de forma segura. Todas las altas
-reciben el rol **Alumno**; un administrador puede cambiarlas a **Docente** o
-**Administrador** desde `/admin/`.
+sesión. Django valida y guarda la contraseña de forma segura. Todas las altas,
+incluidas las creadas por un administrador, reciben el rol **Alumno**. El panel
+propio `/administracion/` permite crear cuentas, cambiarlas a **Docente** o
+**Administrador**, buscar usuarios y configurar las cuotas de IA. `/admin/`
+queda disponible únicamente como herramienta técnica de Django.
 
 Las cuotas iniciales son 10,000 tokens diarios para Alumno, 50,000 para Docente y
 200,000 para Administrador. Se editan en **Roles** dentro del panel administrativo
@@ -158,11 +160,13 @@ Los cuadros de texto aceptan hasta 5000
 caracteres, incluidos saltos de línea; los elementos gráficos se pueden mover,
 redimensionar y animar igual que los cuadros.
 En **Audio** puedes subir archivos MP3, WAV, OGG o M4A de hasta 25 MB, escuchar
-una vista previa y asignar hasta tres pistas a cada diapositiva. La línea de tiempo
-permite ajustar inicio, recorte, volumen, silencio, fundido de entrada y salida, y
-muestra la forma de onda. La duración se amplía al agregar audio o fotogramas que
-terminan después del final actual. Quitar una pista no la borra de la biblioteca
-privada del usuario.
+una vista previa y asignar hasta tres pistas a cada diapositiva. Una pista
+seleccionada puede aplicarse o retirarse de todas las diapositivas a la vez sin
+reemplazar las demás; las hojas que ya tengan tres pistas se omiten y se notifican.
+La línea de tiempo permite ajustar inicio, recorte, volumen, silencio, fundido de
+entrada y salida, y muestra la forma de onda. La duración se amplía al agregar
+audio o fotogramas que terminan después del final actual. Quitar una pista no la
+borra de la biblioteca privada del usuario.
 Enter edita el cuadro seleccionado, Escape termina la edición, las flechas lo
 mueven (Shift mueve 10 píxeles) y Supr lo elimina cuando no estás escribiendo.
 Ctrl+Z o la flecha curva izquierda deshacen la última edición; Ctrl+Y, Ctrl+Shift+Z

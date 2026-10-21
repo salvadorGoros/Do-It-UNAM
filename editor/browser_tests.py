@@ -11,7 +11,7 @@ from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import override_settings
 from PIL import Image
 
-from .models import Proyecto
+from .models import PerfilUsuario, Proyecto, Rol
 
 try:
     from playwright.sync_api import sync_playwright
@@ -66,6 +66,23 @@ class EditorBrowserTests(StaticLiveServerTestCase):
 
     def test_panel_de_proyectos_filtra_y_se_adapta_a_movil(self):
         user = get_user_model().objects.create_user("projects-browser-test", password="Browser-test-123!")
+        role_values = [
+            (Rol.Clave.ALUMNO, "Alumno", 10_000),
+            (Rol.Clave.DOCENTE, "Docente", 50_000),
+            (Rol.Clave.ADMINISTRADOR, "Administrador", 200_000),
+        ]
+        roles = {}
+        for key, name, quota in role_values:
+            roles[key], _ = Rol.objects.get_or_create(
+                clave=key,
+                defaults={"nombre": name, "cuota_tokens_dia": quota},
+            )
+        PerfilUsuario.objects.create(
+            usuario=user,
+            rol=roles[Rol.Clave.ADMINISTRADOR],
+            correo_institucional="projects-browser-test@comunidad.unam.mx",
+            numero_cuenta="312345690",
+        )
         Proyecto.objects.create(
             nombre="Biología celular",
             propietario=user,
@@ -100,6 +117,8 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.wait_for_url(self.live_server_url + "/")
 
             self.assertEqual(page.locator(".project-card").count(), 2)
+            self.assertTrue(page.locator(".admin-access").is_visible())
+            self.assertEqual(page.locator(".admin-access").get_attribute("href"), "/administracion/")
             self.assertEqual(page.locator(".preview-text").first.inner_text(), "La célula")
             page.locator("#project-search").fill("biologia")
             self.assertEqual(page.locator(".project-card:visible").count(), 1)
@@ -112,6 +131,21 @@ class EditorBrowserTests(StaticLiveServerTestCase):
                 page.locator("html").evaluate("el => el.scrollWidth"),
                 page.locator("html").evaluate("el => el.clientWidth"),
             )
+            self.assertTrue(page.locator(".admin-access").is_visible())
+            page.locator(".admin-access").click()
+            page.wait_for_url(self.live_server_url + "/administracion/")
+            self.assertTrue(page.locator(".admin-dashboard").is_visible())
+            self.assertLessEqual(
+                page.locator("html").evaluate("el => el.scrollWidth"),
+                page.locator("html").evaluate("el => el.clientWidth"),
+            )
+            page.locator(".create-user-panel summary").click()
+            self.assertTrue(page.locator(".create-user-popover").is_visible())
+            create_panel = page.locator(".create-user-popover").bounding_box()
+            self.assertGreaterEqual(create_panel["x"], 0)
+            self.assertLessEqual(create_panel["x"] + create_panel["width"], 390)
+            page.locator(".create-user-close").click()
+            self.assertTrue(page.locator(".create-user-popover").is_hidden())
             self.assertEqual(errors, [])
             browser.close()
 
@@ -135,7 +169,14 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             )
             self.assertTrue(page.locator('[data-gallery="ia"]').is_visible())
             self.assertTrue(page.locator("#ai-generate-presentation").is_disabled())
-            page.locator("details.ai-card").nth(2).locator("summary").click()
+            self.assertTrue(page.locator(".ai-hero").is_visible())
+            self.assertGreaterEqual(page.locator("#asset-panel").bounding_box()["width"], 290)
+            cards = page.locator("details.ai-card")
+            self.assertEqual(cards.count(), 4)
+            self.assertTrue(cards.nth(0).evaluate("card => card.open"))
+            cards.nth(2).locator("summary").click()
+            self.assertFalse(cards.nth(0).evaluate("card => card.open"))
+            self.assertTrue(cards.nth(2).evaluate("card => card.open"))
             page.locator("#ai-slide-notes").fill("Guion guardado desde el panel de IA")
             page.wait_for_function(
                 "() => document.querySelector('#save-status').textContent.includes('Guardado automáticamente')"
@@ -145,6 +186,83 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.locator("#ai-tool").click()
             page.locator("details.ai-card").nth(2).locator("summary").click()
             self.assertEqual(page.locator("#ai-slide-notes").input_value(), "Guion guardado desde el panel de IA")
+            self.assertEqual(errors, [])
+            browser.close()
+
+    @override_settings(GEMINI_API_KEY="prueba")
+    def test_panel_ia_muestra_pantalla_de_carga_hasta_recibir_respuesta(self):
+        user = get_user_model().objects.create_user("ai-loading-test", password="Browser-test-123!")
+        proyecto = Proyecto.objects.create(nombre="Carga IA", propietario=user)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            errors = []
+            pending_routes = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("**/ia/generar/", lambda route: pending_routes.append(route))
+            page.goto(self.live_server_url + f"/proyectos/{proyecto.pk}/")
+            page.locator('[name="username"]').fill("ai-loading-test")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.locator("#ai-tool").click()
+            page.wait_for_function("() => !document.querySelector('#ai-generate-text').disabled")
+            self.assertTrue(page.locator(".ai-hero").is_visible())
+            self.assertLessEqual(
+                page.locator("html").evaluate("el => el.scrollWidth"),
+                page.locator("html").evaluate("el => el.clientWidth"),
+            )
+            self.assertEqual(page.locator("#ai-quota-meter").get_attribute("aria-valuenow"), "0")
+            page.locator("details.ai-card").nth(2).locator("summary").click()
+            page.locator("#ai-text-source").fill("Contenido que Gemini debe resumir")
+
+            with page.expect_request("**/ia/generar/"):
+                page.locator("#ai-generate-text").click()
+            page.wait_for_selector("#ai-loading-screen", state="visible")
+            page.wait_for_function("() => document.activeElement?.id === 'ai-loading-screen'")
+            self.assertEqual(len(pending_routes), 1)
+            loading_screen = page.locator("#ai-loading-screen").bounding_box()
+            loading_card = page.locator(".ai-loading-card").bounding_box()
+            self.assertEqual(page.locator("#ai-loading-screen").evaluate("el => getComputedStyle(el).position"), "fixed")
+            self.assertAlmostEqual(loading_screen["width"], 390, delta=1)
+            self.assertLessEqual(loading_card["width"], 390 - 32)
+            self.assertIn("Gemini", page.locator("#ai-loading-title").inner_text())
+            self.assertEqual(page.locator('[data-gallery="ia"]').get_attribute("aria-busy"), "true")
+            self.assertTrue(page.locator("body").evaluate("el => el.classList.contains('ai-request-pending')"))
+            self.assertTrue(page.locator(".ai-primary").evaluate_all("buttons => buttons.every(button => button.disabled)"))
+
+            pending_routes[0].fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "type": "text",
+                    "text": "Resumen generado correctamente.",
+                    "usage": {"input": 10, "output": 4, "total": 14},
+                    "state": {
+                        "configured": True,
+                        "text_model": "gemini-test",
+                        "quota": {"used": 14, "limit": 100000, "remaining": 99986},
+                        "role": {"name": "Cuenta"},
+                    },
+                }),
+            )
+            page.wait_for_selector("#ai-loading-screen", state="hidden")
+            self.assertEqual(page.locator('[data-gallery="ia"]').get_attribute("aria-busy"), "false")
+            self.assertFalse(page.locator("body").evaluate("el => el.classList.contains('ai-request-pending')"))
+            self.assertEqual(page.locator("#ai-text-output").input_value(), "Resumen generado correctamente.")
+            page.wait_for_function("() => document.activeElement?.id === 'ai-generate-text'")
+
+            with page.expect_request("**/ia/generar/"):
+                page.locator("#ai-generate-text").click()
+            page.wait_for_selector("#ai-loading-screen", state="visible")
+            self.assertEqual(len(pending_routes), 2)
+            pending_routes[1].fulfill(
+                status=502,
+                content_type="application/json",
+                body=json.dumps({"error": "Gemini no pudo completar la solicitud. Intenta nuevamente."}),
+            )
+            page.wait_for_selector("#ai-loading-screen", state="hidden")
+            self.assertTrue(page.locator("#ai-message").evaluate("el => el.classList.contains('error')"))
+            self.assertIn("Intenta nuevamente", page.locator("#ai-message").inner_text())
             self.assertEqual(errors, [])
             browser.close()
 
@@ -191,6 +309,65 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.reload()
             page.wait_for_selector("#slide-color-toolbar", state="visible")
             self.assertEqual(page.locator("#stage").evaluate("el => el.style.backgroundColor"), "rgb(59, 130, 246)")
+            browser.close()
+
+    def test_muchas_diapositivas_mantienen_el_editor_y_usan_scroll(self):
+        user = get_user_model().objects.create_user("many-slides-test", password="Browser-test-123!")
+        slides = [{
+            "id": f"slide-{index}",
+            "objetos": [],
+            "fondo": "",
+            "color_fondo": "#ffffff",
+            "audio": "",
+            "audios": [],
+            "marcadores": [],
+            "notas": "",
+            "duracion_frames": 300,
+        } for index in range(1, 101)]
+        proyecto = Proyecto.objects.create(nombre="Muchas diapositivas", propietario=user, diapositivas=slides)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.live_server_url + f"/proyectos/{proyecto.pk}/")
+            page.locator('[name="username"]').fill("many-slides-test")
+            page.locator('[name="password"]').fill("Browser-test-123!")
+            page.get_by_role("button", name="Entrar", exact=True).click()
+            page.wait_for_selector(".slide-thumb")
+            self.assertEqual(page.locator(".slide-thumb").count(), 100)
+
+            normal = page.evaluate("() => ({workspace:document.querySelector('.editor-workspace').getBoundingClientRect().toJSON(), footer:document.querySelector('.slide-footer').getBoundingClientRect().toJSON(), list:{rect:document.querySelector('.slide-list').getBoundingClientRect().toJSON(), sw:document.querySelector('.slide-list').scrollWidth,cw:document.querySelector('.slide-list').clientWidth}})")
+            self.assertLessEqual(normal["workspace"]["right"], 1440)
+            self.assertLessEqual(normal["footer"]["right"], normal["workspace"]["right"])
+            self.assertGreater(normal["list"]["sw"], normal["list"]["cw"])
+            self.assertLessEqual(normal["list"]["rect"]["right"], normal["footer"]["right"])
+
+            page.locator("#elements-tool").click()
+            with_panel = page.evaluate("() => ({panel:document.querySelector('#asset-panel').getBoundingClientRect().toJSON(), workspace:document.querySelector('.editor-workspace').getBoundingClientRect().toJSON(), list:{sw:document.querySelector('.slide-list').scrollWidth,cw:document.querySelector('.slide-list').clientWidth}})")
+            self.assertLessEqual(with_panel["workspace"]["right"], 1440)
+            self.assertLessEqual(with_panel["workspace"]["width"], 1100)
+            self.assertGreater(with_panel["list"]["sw"], with_panel["list"]["cw"])
+            self.assertLessEqual(with_panel["panel"]["right"], with_panel["workspace"]["left"])
+            page.locator("#close-asset-panel").click()
+
+            page.locator("#toggle-timeline").click()
+            timeline_layout = page.evaluate("() => ({workspace:document.querySelector('.editor-workspace').getBoundingClientRect().toJSON(), area:document.querySelector('.stage-area').getBoundingClientRect().toJSON(), timeline:document.querySelector('#timeline-panel').getBoundingClientRect().toJSON(), footer:document.querySelector('.slide-footer').getBoundingClientRect().toJSON(), list:{rect:document.querySelector('.slide-list').getBoundingClientRect().toJSON(), sh:document.querySelector('.slide-list').scrollHeight,ch:document.querySelector('.slide-list').clientHeight}})")
+            self.assertLessEqual(timeline_layout["workspace"]["right"], 1440)
+            self.assertGreater(timeline_layout["list"]["sh"], timeline_layout["list"]["ch"])
+            self.assertLessEqual(timeline_layout["list"]["rect"]["bottom"], timeline_layout["footer"]["bottom"])
+            self.assertLessEqual(timeline_layout["footer"]["bottom"], timeline_layout["timeline"]["top"])
+            self.assertAlmostEqual(timeline_layout["timeline"]["bottom"], timeline_layout["workspace"]["bottom"], delta=1)
+            page.locator(".slide-thumb").last.click()
+            self.assertEqual(page.locator(".slide-thumb").last.get_attribute("aria-current"), "true")
+            page.set_viewport_size({"width": 390, "height": 844})
+            mobile = page.evaluate("() => ({workspace:document.querySelector('.editor-workspace').getBoundingClientRect().toJSON(), timeline:document.querySelector('#timeline-panel').getBoundingClientRect().toJSON(), footer:document.querySelector('.slide-footer').getBoundingClientRect().toJSON(), list:{rect:document.querySelector('.slide-list').getBoundingClientRect().toJSON(), sh:document.querySelector('.slide-list').scrollHeight,ch:document.querySelector('.slide-list').clientHeight}})")
+            self.assertLessEqual(mobile["workspace"]["right"], 390)
+            self.assertGreater(mobile["list"]["sh"], mobile["list"]["ch"])
+            self.assertLessEqual(mobile["list"]["rect"]["bottom"], mobile["footer"]["bottom"])
+            self.assertLessEqual(mobile["footer"]["bottom"], mobile["timeline"]["top"])
+            self.assertAlmostEqual(mobile["timeline"]["bottom"], mobile["workspace"]["bottom"], delta=1)
+            self.assertEqual(errors, [])
             browser.close()
 
     def test_objetos_se_redimensionan_por_todos_los_lados_y_salen_del_marco(self):
@@ -644,7 +821,26 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.locator("#slide-list .slide-thumb").first.click()
             page.locator("#present-button").click()
             self.assertTrue(page.locator("body").evaluate("el => el.classList.contains('presenting')"))
+            self.assertTrue(page.locator("#presentation-chrome").is_visible())
+            self.assertTrue(page.locator("#previous-slide").is_disabled())
+            self.assertEqual(page.locator("#presentation-count").inner_text(), "1 / 3")
+            self.assertIn("MODO PRESENTACIÓN", page.locator(".presentation-topbar").inner_text().upper())
+            page.locator("#toggle-presentation-play").click()
+            self.assertIn("En pausa", page.locator("#presentation-playback-state").inner_text())
+            self.assertEqual(page.locator("#toggle-presentation-play").get_attribute("aria-label"), "Reanudar presentación")
+            page.locator("#toggle-presentation-play").click()
+            self.assertIn("Reproduciendo", page.locator("#presentation-playback-state").inner_text())
+            page.locator("#stage").focus()
+            page.wait_for_function("() => document.body.classList.contains('presentation-ui-hidden')", timeout=4500)
+            page.mouse.move(200, 200)
+            page.wait_for_function("() => !document.body.classList.contains('presentation-ui-hidden')")
             page.locator("#next-slide").click()
+            self.assertEqual(page.locator("#presentation-count").inner_text(), "2 / 3")
+            page.set_viewport_size({"width": 390, "height": 844})
+            mobile_controls = page.locator("#presentation-controls").bounding_box()
+            self.assertGreaterEqual(mobile_controls["x"], 0)
+            self.assertLessEqual(mobile_controls["x"] + mobile_controls["width"], 390)
+            self.assertLessEqual(page.locator(".presentation-topbar").bounding_box()["width"], 390)
             page.locator("#exit-presentation").click()
             self.assertFalse(page.locator("body").evaluate("el => el.classList.contains('presenting')"))
             page.wait_for_function(
@@ -907,6 +1103,10 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.get_by_role("button", name="Entrar", exact=True).click()
             page.wait_for_selector("#audio-tool")
 
+            page.locator("#slide-list .slide-insert").last.click()
+            page.locator("#slide-list .slide-insert").last.click()
+            self.assertEqual(page.locator("#slide-list .slide-thumb").count(), 3)
+            page.locator("#slide-list .slide-thumb").first.click()
             page.locator("#audio-tool").click()
             page.locator("#audio-file-input").set_input_files({
                 "name": "narracion.wav",
@@ -919,6 +1119,15 @@ class EditorBrowserTests(StaticLiveServerTestCase):
                 "() => JSON.parse(document.querySelector('#id_diapositivas').value)[0].audio"
             )
             audio_path = json.loads(page.locator("#id_diapositivas").input_value())[0]["audio"]
+            page.locator("#apply-audio-all").click()
+            page.wait_for_function(
+                "() => JSON.parse(document.querySelector('#id_diapositivas').value).every(slide => slide.audios.length === 1)"
+            )
+            slides_with_audio = json.loads(page.locator("#id_diapositivas").input_value())
+            self.assertTrue(all(slide["audio"] == audio_path for slide in slides_with_audio))
+            self.assertEqual(len({slide["audios"][0]["id"] for slide in slides_with_audio}), 3)
+            self.assertTrue(page.locator("#apply-audio-all").is_disabled())
+            self.assertIn("3 diapositivas", page.locator("#audio-scope-summary").inner_text())
             self.assertTrue(audio_path.startswith(f"audio_uploads/{user.pk}/"))
             self.assertFalse(page.locator("#selected-audio-preview").is_hidden())
             page.wait_for_function(
@@ -935,6 +1144,19 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             self.assertFalse(page.locator("#clear-audio").is_disabled())
             page.locator("#clear-audio").click()
             self.assertEqual(json.loads(page.locator("#id_diapositivas").input_value())[0]["audio"], "")
+            self.assertEqual(
+                sum(bool(slide["audio"]) for slide in json.loads(page.locator("#id_diapositivas").input_value())),
+                2,
+            )
+            page.locator("#slide-list .slide-thumb").nth(1).click()
+            page.locator("#remove-audio-all").click()
+            self.assertTrue(all(
+                not slide["audios"]
+                for slide in json.loads(page.locator("#id_diapositivas").input_value())
+            ))
+            page.wait_for_function(
+                "() => document.querySelector('#save-status').textContent.startsWith('Guardado ')"
+            )
             self.assertEqual(errors, [])
             browser.close()
 
@@ -1003,8 +1225,12 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             self.assertAlmostEqual(presentation_area["width"], 1440, delta=1)
             self.assertAlmostEqual(presentation_area["height"], 1100, delta=1)
             page.wait_for_selector(".click-wait-target", timeout=5000)
+            self.assertTrue(page.locator("body").evaluate("el => el.classList.contains('presentation-awaiting-click')"))
+            self.assertIn("elemento resaltado", page.locator("#presentation-hint").inner_text())
+            self.assertIn("Interacción", page.locator("#presentation-playback-state").inner_text())
             page.locator(".click-wait-target").click()
             page.wait_for_selector(".click-wait-target", state="detached")
+            self.assertFalse(page.locator("body").evaluate("el => el.classList.contains('presentation-awaiting-click')"))
             page.locator("#exit-presentation").click()
             page.wait_for_function(
                 "() => document.querySelector('#save-status').textContent.startsWith('Guardado autom')"

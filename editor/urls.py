@@ -5,6 +5,7 @@ from . import views
 app_name = "editor"
 urlpatterns = [
     path("cuentas/registro/", views.registro, name="registro"),
+    path("administracion/", views.administracion, name="administracion"),
     path("", views.index, name="index"),
     path("proyectos/nuevo/", views.crear, name="crear"),
     path("proyectos/<int:pk>/", views.detalle, name="detalle"),

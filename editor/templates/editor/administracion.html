@@ -1,0 +1,130 @@
+{% extends 'editor/base.html' %}
+{% load static %}
+{% block title %}Administración · DO IT UNAM{% endblock %}
+{% block body_class %}admin-page{% endblock %}
+{% block content %}
+<section class="admin-dashboard" aria-labelledby="admin-title">
+    <header class="admin-hero">
+        <div>
+            <p class="eyebrow">Control institucional</p>
+            <h1 id="admin-title">Administración</h1>
+            <p>Gestiona las cuentas, los roles y el acceso diario a las herramientas de inteligencia artificial.</p>
+        </div>
+        <a class="admin-back" href="{% url 'editor:index' %}">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m15 18-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Mis proyectos
+        </a>
+    </header>
+
+    {% if messages %}
+    <div class="admin-messages" aria-live="polite">
+        {% for message in messages %}<p class="admin-message {{ message.tags }}">{{ message }}</p>{% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="admin-stats" aria-label="Resumen del sistema">
+        <article><span class="admin-stat-icon users" aria-hidden="true">U</span><div><strong>{{ total_users }}</strong><span>Usuarios registrados</span></div></article>
+        <article><span class="admin-stat-icon active" aria-hidden="true">A</span><div><strong>{{ active_users }}</strong><span>Cuentas activas</span></div></article>
+        <article><span class="admin-stat-icon projects" aria-hidden="true">P</span><div><strong>{{ total_projects }}</strong><span>Proyectos creados</span></div></article>
+        <article><span class="admin-stat-icon tokens" aria-hidden="true">IA</span><div><strong>{{ tokens_today|default:0 }}</strong><span>Tokens usados hoy</span></div></article>
+    </div>
+
+    <section class="admin-section role-management" aria-labelledby="roles-title">
+        <div class="admin-section-heading">
+            <div><p class="eyebrow">Permisos y consumo</p><h2 id="roles-title">Roles del sistema</h2></div>
+            <p>La cuota se aplica inmediatamente a todos los usuarios del rol.</p>
+        </div>
+        <div class="role-cards">
+            {% for role in roles %}
+            <article class="role-card role-{{ role.clave }}">
+                <header><span class="role-mark" aria-hidden="true">{{ role.nombre|slice:':1' }}</span><div><h3>{{ role.nombre }}</h3><p>{{ role.total_usuarios }} usuario{{ role.total_usuarios|pluralize }}</p></div></header>
+                <form method="post" class="quota-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="accion" value="actualizar_cuota">
+                    <input type="hidden" name="rol_id" value="{{ role.pk }}">
+                    <label for="quota-{{ role.pk }}">Tokens diarios</label>
+                    <div><input id="quota-{{ role.pk }}" name="cuota_tokens_dia" type="number" min="0" max="10000000" step="1000" value="{{ role.cuota_tokens_dia }}" required><button type="submit">Guardar</button></div>
+                </form>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="admin-section users-management" aria-labelledby="users-title">
+        <div class="admin-section-heading users-heading">
+            <div><p class="eyebrow">Directorio</p><h2 id="users-title">Usuarios y roles</h2></div>
+            <details class="create-user-panel" {% if create_panel_open %}open{% endif %}>
+                <summary><span aria-hidden="true">+</span> Nueva cuenta</summary>
+                <div class="create-user-popover">
+                    <header>
+                        <div><strong>Crear cuenta institucional</strong><small>Toda cuenta nueva comienza con el rol Alumno.</small></div>
+                        <button class="create-user-close" type="button" aria-label="Cerrar formulario">×</button>
+                    </header>
+                    <form method="post" class="create-user-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="accion" value="crear_usuario">
+                        {{ create_form.username }}
+                        <label for="{{ create_form.correo_institucional.id_for_label }}">Correo institucional</label>
+                        {{ create_form.correo_institucional }}{{ create_form.correo_institucional.errors }}
+                        <label for="{{ create_form.numero_cuenta.id_for_label }}">Número de cuenta <small>Opcional</small></label>
+                        {{ create_form.numero_cuenta }}{{ create_form.numero_cuenta.errors }}
+                        <label for="{{ create_form.password1.id_for_label }}">Contraseña</label>
+                        {{ create_form.password1 }}{{ create_form.password1.errors }}
+                        <label for="{{ create_form.password2.id_for_label }}">Confirmar contraseña</label>
+                        {{ create_form.password2 }}{{ create_form.password2.errors }}
+                        {{ create_form.non_field_errors }}
+                        <button type="submit">Crear usuario</button>
+                    </form>
+                </div>
+            </details>
+        </div>
+
+        <form method="get" class="admin-filters" role="search">
+            <label class="admin-search" for="admin-user-search">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                <span class="sr-only">Buscar usuarios</span>
+                <input id="admin-user-search" name="q" type="search" value="{{ search }}" placeholder="Buscar por correo o número de cuenta">
+            </label>
+            <label><span class="sr-only">Filtrar por rol</span><select name="rol"><option value="">Todos los roles</option>{% for role in roles %}<option value="{{ role.clave }}" {% if selected_role_key == role.clave %}selected{% endif %}>{{ role.nombre }}</option>{% endfor %}</select></label>
+            <button type="submit">Filtrar</button>
+            {% if search or selected_role_key %}<a href="{% url 'editor:administracion' %}">Limpiar</a>{% endif %}
+        </form>
+
+        <div class="admin-table-wrap">
+            <table class="admin-users-table">
+                <thead><tr><th>Usuario</th><th>Número de cuenta</th><th>Alta</th><th>Rol y cuota</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+                <tbody>
+                    {% for profile in page_obj %}
+                    <tr>
+                        <td data-label="Usuario"><div class="user-cell"><span class="user-avatar" aria-hidden="true">{{ profile.correo_institucional|slice:':1'|upper }}</span><div><strong>{{ profile.correo_institucional }}</strong><small>{% if profile.usuario_id == user.pk %}Tu cuenta · {% endif %}{% if profile.usuario.is_active %}Activa{% else %}Inactiva{% endif %}</small></div></div></td>
+                        <td data-label="Número de cuenta">{{ profile.numero_cuenta|default:'Sin registrar' }}</td>
+                        <td data-label="Alta">{{ profile.fecha_registro|date:'d/m/Y' }}</td>
+                        <td data-label="Rol y cuota"><span class="role-badge role-{{ profile.rol.clave }}">{{ profile.rol.nombre }}</span><small class="quota-copy">{{ profile.cuota_tokens_dia }} tokens/día</small></td>
+                        <td data-label="Cambiar rol">
+                            <form method="post" class="change-role-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="accion" value="cambiar_rol">
+                                <input type="hidden" name="perfil_id" value="{{ profile.pk }}">
+                                <select name="rol_id" aria-label="Nuevo rol para {{ profile.correo_institucional }}">{% for role in roles %}<option value="{{ role.pk }}" {% if profile.rol_id == role.pk %}selected{% endif %}>{{ role.nombre }}</option>{% endfor %}</select>
+                                <button type="submit">Actualizar</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="admin-empty">No se encontraron usuarios con esos filtros.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if page_obj.paginator.num_pages > 1 %}
+        <nav class="admin-pagination" aria-label="Páginas de usuarios">
+            {% if page_obj.has_previous %}<a href="?q={{ search|urlencode }}&rol={{ selected_role_key|urlencode }}&pagina={{ page_obj.previous_page_number }}">Anterior</a>{% endif %}
+            <span>Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</span>
+            {% if page_obj.has_next %}<a href="?q={{ search|urlencode }}&rol={{ selected_role_key|urlencode }}&pagina={{ page_obj.next_page_number }}">Siguiente</a>{% endif %}
+        </nav>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{% static 'editor/js/administracion.js' %}?v=1" defer></script>{% endblock %}

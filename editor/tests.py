@@ -244,12 +244,74 @@ class ProyectoTests(TestCase):
         self.assertTrue(self.usuario.is_staff)
         self.assertTrue(self.usuario.has_perm("auth.view_user"))
         self.assertTrue(self.usuario.has_perm("editor.change_rol"))
+        self.assertContains(self.client.get(reverse("editor:index")), 'class="admin-access"')
+        self.assertContains(self.client.get(self.detalle), 'class="admin-menu-link"')
 
         profile.rol = Rol.objects.get(clave=Rol.Clave.ALUMNO)
         profile.save()
         self.usuario.refresh_from_db()
         self.assertFalse(self.usuario.is_staff)
         self.assertFalse(self.usuario.has_perm("auth.view_user"))
+        self.assertNotContains(self.client.get(reverse("editor:index")), 'class="admin-access"')
+        self.assertNotContains(self.client.get(self.detalle), 'class="admin-menu-link"')
+
+    def test_panel_administracion_crea_usuarios_cambia_roles_y_cuotas(self):
+        administrator = Rol.objects.get(clave=Rol.Clave.ADMINISTRADOR)
+        teacher = Rol.objects.get(clave=Rol.Clave.DOCENTE)
+        student = Rol.objects.get(clave=Rol.Clave.ALUMNO)
+        own_profile = PerfilUsuario.objects.create(
+            usuario=self.usuario,
+            rol=administrator,
+            correo_institucional="ana@comunidad.unam.mx",
+            numero_cuenta="312345681",
+        )
+        dashboard_url = reverse("editor:administracion")
+        response = self.client.get(dashboard_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Usuarios y roles")
+
+        response = self.client.post(dashboard_url, {
+            "accion": "crear_usuario",
+            "nuevo-correo_institucional": "docente@comunidad.unam.mx",
+            "nuevo-numero_cuenta": "31-2345-682",
+            "nuevo-password1": "Docente-Segura-456!",
+            "nuevo-password2": "Docente-Segura-456!",
+        })
+        self.assertRedirects(response, dashboard_url)
+        created = PerfilUsuario.objects.get(correo_institucional="docente@comunidad.unam.mx")
+        self.assertEqual(created.rol, student)
+        self.assertEqual(created.numero_cuenta, "312345682")
+
+        response = self.client.post(dashboard_url, {
+            "accion": "cambiar_rol",
+            "perfil_id": created.pk,
+            "rol_id": administrator.pk,
+        })
+        self.assertRedirects(response, dashboard_url)
+        created.refresh_from_db()
+        created.usuario.refresh_from_db()
+        self.assertEqual(created.rol, administrator)
+        self.assertTrue(created.usuario.is_staff)
+
+        self.client.post(dashboard_url, {
+            "accion": "actualizar_cuota",
+            "rol_id": teacher.pk,
+            "cuota_tokens_dia": "64000",
+        })
+        teacher.refresh_from_db()
+        self.assertEqual(teacher.cuota_tokens_dia, 64_000)
+
+        response = self.client.post(dashboard_url, {
+            "accion": "cambiar_rol",
+            "perfil_id": own_profile.pk,
+            "rol_id": student.pk,
+        }, follow=True)
+        own_profile.refresh_from_db()
+        self.assertEqual(own_profile.rol, administrator)
+        self.assertContains(response, "No puedes retirar tu propio acceso administrativo")
+
+        self.client.force_login(self.otro)
+        self.assertEqual(self.client.get(dashboard_url).status_code, 403)
 
     @override_settings(GEMINI_API_KEY="prueba")
     def test_estado_ia_usa_cuota_configurable_del_rol(self):

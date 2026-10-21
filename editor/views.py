@@ -10,11 +10,12 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Count, Q, Sum
+from django.core.paginator import Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -27,7 +28,7 @@ from .forms import EditorForm, ProyectoForm, RegistroForm
 from .exports import exportar_gif, exportar_imagenes, exportar_pdf, exportar_pptx, exportar_video
 from . import gemini as gemini_service
 from .documents import DocumentValidationError, validate_document
-from .models import DocumentoFuente, PlantillaAnimacion, Proyecto, TrabajoConversion, UsoIA
+from .models import DocumentoFuente, PerfilUsuario, PlantillaAnimacion, Proyecto, Rol, TrabajoConversion, UsoIA
 from .tasks import convertir_documento
 from .scene import (
     UPLOADED_AUDIO_PATTERN,
@@ -335,6 +336,100 @@ def registro(request):
         login(request, usuario, backend="django.contrib.auth.backends.ModelBackend")
         return redirect("editor:index")
     return render(request, "registration/registro.html", {"form": form})
+
+
+def _puede_administrar(usuario):
+    return usuario.is_authenticated and usuario.is_active and usuario.is_staff
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def administracion(request):
+    if not _puede_administrar(request.user):
+        raise PermissionDenied("No tienes permisos para administrar usuarios.")
+
+    roles = list(Rol.objects.annotate(total_usuarios=Count("perfiles")).order_by("pk"))
+    create_form = RegistroForm(prefix="nuevo")
+    create_panel_open = False
+
+    if request.method == "POST":
+        action = request.POST.get("accion")
+        if action == "crear_usuario":
+            create_panel_open = True
+            create_form = RegistroForm(request.POST, prefix="nuevo")
+            if create_form.is_valid():
+                usuario = create_form.save()
+                profile = usuario.perfil_institucional
+                messages.success(
+                    request,
+                    f"Se creó la cuenta {profile.correo_institucional} con el rol Alumno.",
+                )
+                return redirect("editor:administracion")
+        elif action == "cambiar_rol":
+            profile = get_object_or_404(
+                PerfilUsuario.objects.select_related("usuario", "rol"),
+                pk=request.POST.get("perfil_id"),
+            )
+            selected_role = get_object_or_404(Rol, pk=request.POST.get("rol_id"))
+            removes_own_access = (
+                profile.usuario_id == request.user.pk
+                and profile.rol.clave == Rol.Clave.ADMINISTRADOR
+                and selected_role.clave != Rol.Clave.ADMINISTRADOR
+                and not request.user.is_superuser
+            )
+            if removes_own_access:
+                messages.error(request, "No puedes retirar tu propio acceso administrativo.")
+            else:
+                profile.rol = selected_role
+                profile.save()
+                messages.success(
+                    request,
+                    f"{profile.correo_institucional} ahora tiene el rol {selected_role.nombre}.",
+                )
+            return redirect("editor:administracion")
+        elif action == "actualizar_cuota":
+            role = get_object_or_404(Rol, pk=request.POST.get("rol_id"))
+            try:
+                quota = int(request.POST.get("cuota_tokens_dia", ""))
+                if not 0 <= quota <= 10_000_000:
+                    raise ValueError
+            except (TypeError, ValueError):
+                messages.error(request, "La cuota debe estar entre 0 y 10,000,000 tokens.")
+            else:
+                role.cuota_tokens_dia = quota
+                role.full_clean()
+                role.save(update_fields=["cuota_tokens_dia"])
+                messages.success(request, f"Se actualizó la cuota del rol {role.nombre}.")
+            return redirect("editor:administracion")
+
+    search = request.GET.get("q", "").strip()[:100]
+    selected_role_key = request.GET.get("rol", "").strip()
+    profiles = PerfilUsuario.objects.select_related("usuario", "rol")
+    if search:
+        profiles = profiles.filter(
+            Q(correo_institucional__icontains=search)
+            | Q(numero_cuenta__icontains=search)
+            | Q(usuario__username__icontains=search)
+        )
+    if selected_role_key in Rol.Clave.values:
+        profiles = profiles.filter(rol__clave=selected_role_key)
+    profiles = profiles.order_by("correo_institucional")
+    page_obj = Paginator(profiles, 20).get_page(request.GET.get("pagina"))
+    today = timezone.localdate()
+    tokens_today = UsoIA.objects.filter(creado__date=today).aggregate(total=Sum("tokens_totales"))["total"] or 0
+
+    return render(request, "editor/administracion.html", {
+        "roles": roles,
+        "page_obj": page_obj,
+        "create_form": create_form,
+        "create_panel_open": create_panel_open,
+        "search": search,
+        "selected_role_key": selected_role_key,
+        "total_users": PerfilUsuario.objects.count(),
+        "active_users": PerfilUsuario.objects.filter(usuario__is_active=True).count(),
+        "total_projects": Proyecto.objects.count(),
+        "tokens_today": tokens_today,
+    })
 
 
 @login_required
