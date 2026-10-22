@@ -38,6 +38,32 @@ button, summary, a, input, select { touch-action: manipulation; }
 .image-upload-status { min-height: 18px; color: #475569; font-size: 11px; }
 .image-upload-status:empty { display: none; }
 .uploaded-image-gallery .asset-section-title { margin-top: 14px; }
+.uploaded-image-card { min-width: 0; overflow: hidden; border: 1px solid #d8e1e8; border-radius: 9px; background: white; box-shadow: 0 2px 7px #0f2f4410; }
+.uploaded-image-card .asset-choice { width: 100%; border: 0; border-radius: 0; }
+.remove-background-trigger { display: flex; width: calc(100% - 8px); min-height: 30px; align-items: center; justify-content: center; gap: 5px; margin: 0 4px 4px; border: 1px solid #c7d6df; border-radius: 6px; background: #f4f8fa; padding: 5px; color: #28586f; font-size: 9px; font-weight: 700; }
+.remove-background-trigger:hover, .remove-background-trigger:focus-visible { border-color: #3b82a4; background: #e8f3f8; color: #124763; }
+.remove-background-dialog { width: min(430px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; border: 0; border-radius: 18px; background: white; padding: 0; color: #173f57; box-shadow: 0 24px 70px #071f2f66; }
+.remove-background-dialog::backdrop { background: #061927a8; backdrop-filter: blur(3px); }
+.remove-background-heading { display: grid; grid-template-columns: 44px minmax(0, 1fr) 38px; align-items: center; gap: 10px; border-bottom: 1px solid #dce7ed; padding: 14px 16px; background: #f6fafc; }
+.remove-background-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 12px; background: #dff1f7; color: #126889; }
+.remove-background-heading p, .remove-background-heading h2 { margin: 0; }
+.remove-background-heading p { color: #718995; font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.remove-background-heading h2 { font-size: 17px; font-weight: 700; }
+.remove-background-heading button { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid #d4e0e6; border-radius: 10px; background: white; color: #526d7b; }
+.remove-background-preview { display: grid; min-height: 220px; margin: 16px 16px 8px; place-items: center; overflow: hidden; border: 1px solid #cedbe2; border-radius: 13px; background-color: white; background-image: linear-gradient(45deg, #dbe4e9 25%, transparent 25%), linear-gradient(-45deg, #dbe4e9 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #dbe4e9 75%), linear-gradient(-45deg, transparent 75%, #dbe4e9 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; }
+.remove-background-preview img { display: block; width: 100%; max-height: 280px; object-fit: contain; }
+.remove-background-image-name { overflow: hidden; margin: 0 16px 13px; color: #617987; font-size: 11px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.remove-background-control { display: grid; gap: 8px; margin: 0 16px; border: 1px solid #dce6eb; border-radius: 12px; background: #f8fbfc; padding: 12px; }
+.remove-background-control > span { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; }
+.remove-background-control output { min-width: 34px; border-radius: 999px; background: #dceef5; padding: 3px 8px; color: #135e7c; text-align: center; font-size: 10px; font-weight: 700; }
+.remove-background-control input { width: 100%; accent-color: #176f94; }
+.remove-background-control small { color: #6d818c; font-size: 9px; line-height: 1.5; }
+.remove-background-status { min-height: 18px; margin: 10px 16px 0; color: #a0441d; font-size: 10px; }
+.remove-background-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 16px 16px; }
+.remove-background-actions button { min-height: 39px; border: 1px solid #cbd8df; border-radius: 9px; background: white; padding: 8px 12px; color: #38586a; font-size: 10px; font-weight: 700; }
+.remove-background-actions #confirm-remove-background { border-color: #0d5879; background: #0d5879; color: white; }
+.remove-background-actions #confirm-remove-background:hover, .remove-background-actions #confirm-remove-background:focus-visible { background: #0a4662; }
+.remove-background-actions button:disabled { cursor: wait; opacity: .6; }
 .clear-background { margin-bottom: 10px; font-size: 12px; }
 .asset-help { margin-top: -5px !important; color: #64748b !important; font-size: 10px !important; }
 .asset-panel[data-section="ia"] { width: 324px; min-width: 290px; flex-basis: 324px; border-right-color: #d5e2e9; background: #f7fafc; }
@@ -986,6 +1012,9 @@ body.timeline-open .slide-insert span {
     .timeline-action { min-width: 34px; padding-inline: 7px !important; }
     .timeline-zoom-control { padding-inline: 6px; }
     #timeline-zoom { width: 58px; }
+    .remove-background-preview { min-height: 170px; }
+    .remove-background-actions { display: grid; grid-template-columns: 1fr; }
+    .remove-background-actions button { min-height: 44px; }
 }
 @media (max-height: 600px) and (max-width: 950px) {
     .editor-topbar { display: flex; flex-wrap: nowrap; padding-block: 4px; }

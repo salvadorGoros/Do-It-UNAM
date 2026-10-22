@@ -12,7 +12,7 @@
     <!-- Fuente Poppins -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/png" href="{% static 'editor/images/favicon.png' %}?v=2">
-    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=42">
+    <link rel="stylesheet" href="{% static 'editor/css/editor.css' %}?v=43">
 </head>
 <body class="h-screen flex flex-col bg-[#f3f4f6] overflow-hidden text-gray-700">
 
@@ -156,7 +156,7 @@
                 {% endfor %}
                 </div>
             </div>
-            <div class="asset-gallery uploaded-image-gallery" data-gallery="imagenes" data-upload-url="{% url 'editor:subir_imagen' proyecto.pk %}" data-images-url="{% url 'editor:imagenes_subidas' %}" hidden>
+            <div class="asset-gallery uploaded-image-gallery" data-gallery="imagenes" data-upload-url="{% url 'editor:subir_imagen' proyecto.pk %}" data-images-url="{% url 'editor:imagenes_subidas' %}" data-remove-background-url="{% url 'editor:quitar_fondo_imagen' proyecto.pk %}" hidden>
                 <p>Sube y conserva tus imágenes para usarlas en cualquier diapositiva. PNG, JPEG o WEBP; máximo 15 MB por imagen y 10 por tanda.</p>
                 <input id="image-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
                 <button id="upload-image-trigger" class="upload-image-button" type="button">
@@ -654,8 +654,32 @@
         </main>
         </div>
     </div>
+    <dialog id="remove-background-dialog" class="remove-background-dialog" aria-labelledby="remove-background-title">
+        <div class="remove-background-heading">
+            <span class="remove-background-icon" aria-hidden="true"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
+            <div>
+                <p>Edición de imagen</p>
+                <h2 id="remove-background-title">Quitar fondo</h2>
+            </div>
+            <button id="close-remove-background" type="button" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        </div>
+        <div class="remove-background-preview">
+            <img id="remove-background-preview-image" src="" alt="Vista previa de la imagen seleccionada">
+        </div>
+        <p id="remove-background-image-name" class="remove-background-image-name"></p>
+        <label class="remove-background-control" for="remove-background-tolerance">
+            <span><strong>Precisión del recorte</strong><output id="remove-background-tolerance-value">32</output></span>
+            <input id="remove-background-tolerance" type="range" min="5" max="100" value="32" step="1">
+            <small>Sube el valor si quedan partes del fondo. Funciona mejor con fondos lisos o uniformes.</small>
+        </label>
+        <p id="remove-background-status" class="remove-background-status" role="status" aria-live="polite"></p>
+        <div class="remove-background-actions">
+            <button id="cancel-remove-background" type="button">Cancelar</button>
+            <button id="confirm-remove-background" type="button"><i class="fa-solid fa-scissors" aria-hidden="true"></i> Crear PNG sin fondo</button>
+        </div>
+    </dialog>
     <span id="object-count" class="sr-only"></span>
     {{ objetos|json_script:"scene-data" }}
-    <script src="{% static 'editor/js/editor.js' %}?v=42" defer></script>
+    <script src="{% static 'editor/js/editor.js' %}?v=43" defer></script>
 </body>
 </html>

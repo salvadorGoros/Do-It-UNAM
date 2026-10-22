@@ -523,6 +523,55 @@ class ProyectoTests(TestCase):
             self.assertIn("imagen válida", response.json()["error"])
             self.assertEqual(self.client.get(reverse("editor:imagenes_subidas")).json()["images"], [])
 
+    def test_quitar_fondo_crea_png_transparente_y_conserva_original(self):
+        image_data = BytesIO()
+        source = Image.new("RGB", (30, 20), "white")
+        for x in range(10, 20):
+            for y in range(5, 15):
+                source.putpixel((x, y), (220, 20, 60))
+        source.save(image_data, format="PNG")
+
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            upload = self.client.post(
+                reverse("editor:subir_imagen", args=[self.proyecto.pk]),
+                {"images": SimpleUploadedFile("producto.png", image_data.getvalue(), content_type="image/png")},
+            )
+            original = upload.json()["images"][0]
+            response = self.client.post(
+                reverse("editor:quitar_fondo_imagen", args=[self.proyecto.pk]),
+                {"path": original["path"], "tolerance": 32},
+            )
+            self.assertEqual(response.status_code, 201)
+            result = response.json()
+            self.assertNotEqual(result["image"]["path"], original["path"])
+            self.assertTrue(result["image"]["path"].endswith("-sin-fondo.png"))
+            self.assertGreater(result["removed_percentage"], 80)
+
+            with default_storage.open(result["image"]["path"], "rb") as generated:
+                with Image.open(generated) as transparent:
+                    self.assertEqual(transparent.mode, "RGBA")
+                    self.assertEqual(transparent.getpixel((0, 0))[3], 0)
+                    self.assertGreater(transparent.getpixel((15, 10))[3], 240)
+            with default_storage.open(original["path"], "rb") as original_file:
+                self.assertEqual(original_file.read(), image_data.getvalue())
+
+    def test_quitar_fondo_rechaza_imagen_ajena(self):
+        image_data = BytesIO()
+        Image.new("RGB", (10, 10), "white").save(image_data, format="PNG")
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            otro_cliente = Client()
+            otro_cliente.force_login(self.otro)
+            upload = otro_cliente.post(
+                reverse("editor:subir_imagen", args=[self.ajeno.pk]),
+                {"images": SimpleUploadedFile("ajena.png", image_data.getvalue(), content_type="image/png")},
+            )
+            response = self.client.post(
+                reverse("editor:quitar_fondo_imagen", args=[self.proyecto.pk]),
+                {"path": upload.json()["images"][0]["path"], "tolerance": 32},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("no pertenece", response.json()["error"])
+
     def test_audio_se_sube_se_asigna_y_permanece_privado(self):
         audio_data = (
             b"RIFF" + (36).to_bytes(4, "little") + b"WAVE"

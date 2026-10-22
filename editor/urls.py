@@ -11,6 +11,7 @@ urlpatterns = [
     path("proyectos/<int:pk>/", views.detalle, name="detalle"),
     path("proyectos/<int:pk>/guardar/", views.guardar, name="guardar"),
     path("proyectos/<int:pk>/imagenes/subir/", views.subir_imagen, name="subir_imagen"),
+    path("proyectos/<int:pk>/imagenes/quitar-fondo/", views.quitar_fondo_imagen, name="quitar_fondo_imagen"),
     path("imagenes/subidas/", views.imagenes_subidas, name="imagenes_subidas"),
     path("imagenes/subidas/<int:owner_id>/<str:filename>/", views.imagen_subida, name="imagen_subida"),
     path("proyectos/<int:pk>/audios/subir/", views.subir_audio, name="subir_audio"),

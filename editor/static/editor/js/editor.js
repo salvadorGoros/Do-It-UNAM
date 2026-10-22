@@ -1705,6 +1705,8 @@
         const grid = $("uploaded-image-grid");
         grid.replaceChildren();
         for (const image of images) {
+            const card = document.createElement("article");
+            card.className = "uploaded-image-card";
             const choice = document.createElement("button");
             choice.type = "button";
             choice.className = "asset-choice";
@@ -1721,13 +1723,73 @@
                 addElement(image.path);
                 closeAssetPanelOnCompactScreen();
             });
-            grid.append(choice);
+            const removeBackground = document.createElement("button");
+            removeBackground.type = "button";
+            removeBackground.className = "remove-background-trigger";
+            removeBackground.innerHTML = '<i class="fa-solid fa-scissors" aria-hidden="true"></i><span>Quitar fondo</span>';
+            removeBackground.setAttribute("aria-label", `Quitar fondo de ${image.name}`);
+            removeBackground.addEventListener("click", () => openRemoveBackgroundDialog(image));
+            card.append(choice, removeBackground);
+            grid.append(card);
         }
         $("uploaded-image-empty").hidden = images.length > 0;
     }
 
     let uploadedImagesRequest = 0;
     let uploadedImagesCache = [];
+    let imageSelectedForBackgroundRemoval = null;
+
+    function closeRemoveBackgroundDialog() {
+        const dialog = $("remove-background-dialog");
+        imageSelectedForBackgroundRemoval = null;
+        if (dialog.open) dialog.close();
+    }
+
+    function openRemoveBackgroundDialog(image) {
+        imageSelectedForBackgroundRemoval = image;
+        $("remove-background-preview-image").src = image.url;
+        $("remove-background-image-name").textContent = image.name;
+        $("remove-background-status").textContent = "";
+        $("remove-background-tolerance").value = "32";
+        $("remove-background-tolerance-value").value = "32";
+        const dialog = $("remove-background-dialog");
+        if (!dialog.open) dialog.showModal();
+    }
+
+    async function removeSelectedImageBackground() {
+        if (!imageSelectedForBackgroundRemoval) return;
+        const gallery = document.querySelector('[data-gallery="imagenes"]');
+        const button = $("confirm-remove-background");
+        const status = $("remove-background-status");
+        const data = new FormData();
+        data.append("path", imageSelectedForBackgroundRemoval.path);
+        data.append("tolerance", $("remove-background-tolerance").value);
+        data.append("csrfmiddlewaretoken", form.elements.csrfmiddlewaretoken.value);
+        button.disabled = true;
+        status.textContent = "Eliminando el fondo y creando tu PNG…";
+        try {
+            const response = await fetch(gallery.dataset.removeBackgroundUrl, {
+                method: "POST",
+                body: data,
+                headers: {"X-Requested-With": "XMLHttpRequest"},
+                credentials: "same-origin",
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudo quitar el fondo.");
+            uploadedImagesCache = [
+                result.image,
+                ...uploadedImagesCache.filter(image => image.path !== result.image.path),
+            ];
+            renderUploadedImages(uploadedImagesCache);
+            $("image-upload-status").textContent = `PNG sin fondo creado. Se retiró ${result.removed_percentage}% de la imagen.`;
+            closeRemoveBackgroundDialog();
+        } catch (error) {
+            status.textContent = error.message || "No se pudo quitar el fondo.";
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     function mergeUploadedImages(images) {
         const merged = new Map();
         for (const image of [...images, ...uploadedImagesCache]) merged.set(image.path, image);
@@ -2728,6 +2790,15 @@
     $("image-file-input").addEventListener("change", event => {
         uploadImages([...event.target.files]);
         event.target.value = "";
+    });
+    $("remove-background-tolerance").addEventListener("input", event => {
+        $("remove-background-tolerance-value").value = event.target.value;
+    });
+    $("confirm-remove-background").addEventListener("click", removeSelectedImageBackground);
+    $("cancel-remove-background").addEventListener("click", closeRemoveBackgroundDialog);
+    $("close-remove-background").addEventListener("click", closeRemoveBackgroundDialog);
+    $("remove-background-dialog").addEventListener("click", event => {
+        if (event.target === event.currentTarget) closeRemoveBackgroundDialog();
     });
     $("upload-audio-trigger").addEventListener("click", () => $("audio-file-input").click());
     $("audio-file-input").addEventListener("change", event => {

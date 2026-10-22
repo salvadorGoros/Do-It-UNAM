@@ -22,7 +22,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.text import slugify
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFilter, ImageOps, UnidentifiedImageError
 
 from .forms import EditorForm, ProyectoForm, RegistroForm
 from .exports import exportar_gif, exportar_imagenes, exportar_pdf, exportar_pptx, exportar_video
@@ -157,6 +157,31 @@ def _imagen_serializada(relative_path, owner_id):
         ),
         "name": name,
     }
+
+
+def _quitar_fondo_uniforme(source, tolerance):
+    """Vuelve transparentes solo las zonas similares conectadas a las esquinas."""
+    image = ImageOps.exif_transpose(source).convert("RGBA")
+    alpha_before = image.getchannel("A").histogram()[0]
+    width, height = image.size
+    for corner in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)):
+        red, green, blue, alpha = image.getpixel(corner)
+        if alpha == 0:
+            continue
+        ImageDraw.floodfill(
+            image,
+            corner,
+            (red, green, blue, 0),
+            thresh=tolerance,
+        )
+
+    alpha = image.getchannel("A")
+    transparent_after = alpha.histogram()[0]
+    removed_pixels = max(0, transparent_after - alpha_before)
+    if removed_pixels:
+        # Suaviza apenas el recorte para evitar bordes dentados.
+        image.putalpha(alpha.filter(ImageFilter.GaussianBlur(radius=0.65)))
+    return image, removed_pixels
 
 
 def _detectar_formato_audio(uploaded_file):
@@ -556,6 +581,57 @@ def subir_imagen(request, pk):
         image["name"] = original_name or image["name"]
         images.append(image)
     return JsonResponse({"images": images}, status=201)
+
+
+@login_required
+@require_POST
+def quitar_fondo_imagen(request, pk):
+    get_object_or_404(Proyecto, pk=pk, propietario=request.user)
+    relative_path = request.POST.get("path", "").strip()
+    expected_directory = f"uploads/{request.user.pk}/"
+    if (
+        not relative_path.startswith(expected_directory)
+        or not UPLOADED_IMAGE_PATTERN.fullmatch(relative_path)
+    ):
+        return JsonResponse({"error": "La imagen no pertenece a tu biblioteca."}, status=400)
+
+    try:
+        tolerance = int(request.POST.get("tolerance", 32))
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "La precisión seleccionada no es válida."}, status=400)
+    if not 5 <= tolerance <= 100:
+        return JsonResponse({"error": "La precisión debe estar entre 5 y 100."}, status=400)
+
+    try:
+        with default_storage.open(relative_path, "rb") as image_file:
+            with Image.open(image_file) as source:
+                if source.width * source.height > MAX_UPLOADED_IMAGE_PIXELS:
+                    return JsonResponse({"error": "La imagen supera el límite de 40 megapíxeles."}, status=400)
+                result, removed_pixels = _quitar_fondo_uniforme(source, tolerance)
+    except (FileNotFoundError, UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        return JsonResponse({"error": "La imagen ya no está disponible o no es válida."}, status=400)
+
+    if not removed_pixels:
+        return JsonResponse({
+            "error": "No se detectó un fondo uniforme. Prueba con una precisión más alta.",
+        }, status=422)
+
+    original_stem = re.sub(r"^[a-f0-9]{32}_?", "", Path(relative_path).stem)
+    safe_stem = slugify(original_stem)[:48] or "imagen"
+    filename = f"{uuid4().hex}_{safe_stem}-sin-fondo.png"
+    output = BytesIO()
+    result.save(output, format="PNG", optimize=True)
+    output.seek(0)
+    saved_path = default_storage.save(
+        f"{expected_directory}{filename}",
+        ContentFile(output.getvalue()),
+    )
+    image = _imagen_serializada(saved_path, request.user.pk)
+    removed_percentage = round(removed_pixels * 100 / (result.width * result.height), 1)
+    return JsonResponse({
+        "image": image,
+        "removed_percentage": removed_percentage,
+    }, status=201)
 
 
 @login_required

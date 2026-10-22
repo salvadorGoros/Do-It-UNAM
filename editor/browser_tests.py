@@ -939,7 +939,11 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.locator("#images-tool").click()
 
             image_data = BytesIO()
-            Image.new("RGB", (16, 12), "purple").save(image_data, format="PNG")
+            upload_image = Image.new("RGB", (24, 18), "white")
+            for x in range(7, 17):
+                for y in range(5, 13):
+                    upload_image.putpixel((x, y), (128, 0, 128))
+            upload_image.save(image_data, format="PNG")
             image_bytes = image_data.getvalue()
             page.locator("#image-file-input").set_input_files({
                 "name": "seleccionada.png",
@@ -989,6 +993,24 @@ class EditorBrowserTests(StaticLiveServerTestCase):
             page.wait_for_function(
                 "() => document.querySelectorAll('[data-gallery=\"imagenes\"] .asset-choice').length === 2"
             )
+            self.assertEqual(page.locator(".remove-background-trigger").count(), 2)
+            page.locator(".remove-background-trigger").first.click()
+            self.assertTrue(page.locator("#remove-background-dialog").is_visible())
+            page.locator("#remove-background-tolerance").fill("40")
+            self.assertEqual(page.locator("#remove-background-tolerance-value").text_content(), "40")
+            page.locator("#confirm-remove-background").click()
+            page.wait_for_function(
+                "() => document.querySelectorAll('[data-gallery=\"imagenes\"] .asset-choice').length === 3"
+            )
+            self.assertTrue(page.locator("#remove-background-dialog").is_hidden())
+            self.assertIn("PNG sin fondo creado", page.locator("#image-upload-status").text_content())
+
+            page.set_viewport_size({"width": 390, "height": 844})
+            page.locator(".remove-background-trigger").first.click()
+            dialog_box = page.locator("#remove-background-dialog").bounding_box()
+            self.assertGreaterEqual(dialog_box["x"], 0)
+            self.assertLessEqual(dialog_box["x"] + dialog_box["width"], 390)
+            page.locator("#cancel-remove-background").click()
             self.assertEqual(errors, [])
             browser.close()
         proyecto.refresh_from_db()
