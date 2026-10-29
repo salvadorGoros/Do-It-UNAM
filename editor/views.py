@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import login
+from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
@@ -412,6 +412,33 @@ def administracion(request):
                     f"{profile.correo_institucional} ahora tiene el rol {selected_role.nombre}.",
                 )
             return redirect("editor:administracion")
+        elif action == "asignar_rol_usuario":
+            account = get_object_or_404(
+                get_user_model(),
+                pk=request.POST.get("usuario_id"),
+            )
+            selected_role = get_object_or_404(Rol, pk=request.POST.get("rol_id"))
+            if PerfilUsuario.objects.filter(usuario=account).exists():
+                messages.error(request, "Esta cuenta ya tiene un perfil institucional.")
+            else:
+                profile = PerfilUsuario(
+                    usuario=account,
+                    rol=selected_role,
+                    correo_institucional=request.POST.get("correo_institucional", ""),
+                    numero_cuenta=request.POST.get("numero_cuenta", ""),
+                )
+                try:
+                    with transaction.atomic():
+                        profile.full_clean()
+                        profile.save()
+                except ValidationError as error:
+                    messages.error(request, " ".join(error.messages))
+                else:
+                    messages.success(
+                        request,
+                        f"Se asignó el rol {selected_role.nombre} a {profile.correo_institucional}.",
+                    )
+            return redirect("editor:administracion")
         elif action == "actualizar_cuota":
             role = get_object_or_404(Rol, pk=request.POST.get("rol_id"))
             try:
@@ -429,17 +456,18 @@ def administracion(request):
 
     search = request.GET.get("q", "").strip()[:100]
     selected_role_key = request.GET.get("rol", "").strip()
-    profiles = PerfilUsuario.objects.select_related("usuario", "rol")
+    accounts = get_user_model().objects.select_related("perfil_institucional__rol")
     if search:
-        profiles = profiles.filter(
-            Q(correo_institucional__icontains=search)
-            | Q(numero_cuenta__icontains=search)
-            | Q(usuario__username__icontains=search)
+        accounts = accounts.filter(
+            Q(perfil_institucional__correo_institucional__icontains=search)
+            | Q(perfil_institucional__numero_cuenta__icontains=search)
+            | Q(email__icontains=search)
+            | Q(username__icontains=search)
         )
     if selected_role_key in Rol.Clave.values:
-        profiles = profiles.filter(rol__clave=selected_role_key)
-    profiles = profiles.order_by("correo_institucional")
-    page_obj = Paginator(profiles, 20).get_page(request.GET.get("pagina"))
+        accounts = accounts.filter(perfil_institucional__rol__clave=selected_role_key)
+    accounts = accounts.order_by("email", "username")
+    page_obj = Paginator(accounts, 20).get_page(request.GET.get("pagina"))
     today = timezone.localdate()
     tokens_today = UsoIA.objects.filter(creado__date=today).aggregate(total=Sum("tokens_totales"))["total"] or 0
 
@@ -450,8 +478,8 @@ def administracion(request):
         "create_panel_open": create_panel_open,
         "search": search,
         "selected_role_key": selected_role_key,
-        "total_users": PerfilUsuario.objects.count(),
-        "active_users": PerfilUsuario.objects.filter(usuario__is_active=True).count(),
+        "total_users": get_user_model().objects.count(),
+        "active_users": get_user_model().objects.filter(is_active=True).count(),
         "total_projects": Proyecto.objects.count(),
         "tokens_today": tokens_today,
     })

@@ -94,13 +94,15 @@
             <table class="admin-users-table">
                 <thead><tr><th>Usuario</th><th>Número de cuenta</th><th>Alta</th><th>Rol y cuota</th><th><span class="sr-only">Acciones</span></th></tr></thead>
                 <tbody>
-                    {% for profile in page_obj %}
+                    {% for account in page_obj %}
+                    {% with profile=account.perfil_institucional %}
                     <tr>
-                        <td data-label="Usuario"><div class="user-cell"><span class="user-avatar" aria-hidden="true">{{ profile.correo_institucional|slice:':1'|upper }}</span><div><strong>{{ profile.correo_institucional }}</strong><small>{% if profile.usuario_id == user.pk %}Tu cuenta · {% endif %}{% if profile.usuario.is_active %}Activa{% else %}Inactiva{% endif %}</small></div></div></td>
-                        <td data-label="Número de cuenta">{{ profile.numero_cuenta|default:'Sin registrar' }}</td>
-                        <td data-label="Alta">{{ profile.fecha_registro|date:'d/m/Y' }}</td>
-                        <td data-label="Rol y cuota"><span class="role-badge role-{{ profile.rol.clave }}">{{ profile.rol.nombre }}</span><small class="quota-copy">{{ profile.cuota_tokens_dia }} tokens/día</small></td>
+                        <td data-label="Usuario"><div class="user-cell"><span class="user-avatar" aria-hidden="true">{% firstof profile.correo_institucional account.email account.username as account_label %}{{ account_label|slice:':1'|upper }}</span><div><strong>{{ account_label }}</strong><small>{% if account.pk == user.pk %}Tu cuenta · {% endif %}{% if account.is_active %}Activa{% else %}Inactiva{% endif %}{% if not profile %} · Cuenta anterior sin perfil institucional{% endif %}</small></div></div></td>
+                        <td data-label="Número de cuenta">{% if profile %}{{ profile.numero_cuenta|default:'Sin registrar' }}{% else %}Sin registrar{% endif %}</td>
+                        <td data-label="Alta">{% if profile %}{{ profile.fecha_registro|date:'d/m/Y' }}{% else %}{{ account.date_joined|date:'d/m/Y' }}{% endif %}</td>
+                        <td data-label="Rol y cuota">{% if profile %}<span class="role-badge role-{{ profile.rol.clave }}">{{ profile.rol.nombre }}</span><small class="quota-copy">{{ profile.cuota_tokens_dia }} tokens/día</small>{% else %}<span class="role-badge">Sin asignar</span><small class="quota-copy">Faltan datos institucionales</small>{% endif %}</td>
                         <td data-label="Cambiar rol">
+                            {% if profile %}
                             <form method="post" class="change-role-form">
                                 {% csrf_token %}
                                 <input type="hidden" name="accion" value="cambiar_rol">
@@ -108,8 +110,23 @@
                                 <select name="rol_id" aria-label="Nuevo rol para {{ profile.correo_institucional }}">{% for role in roles %}<option value="{{ role.pk }}" {% if profile.rol_id == role.pk %}selected{% endif %}>{{ role.nombre }}</option>{% endfor %}</select>
                                 <button type="submit">Actualizar</button>
                             </form>
+                            {% else %}
+                            <form method="post" class="change-role-form legacy-role-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="accion" value="asignar_rol_usuario">
+                                <input type="hidden" name="usuario_id" value="{{ account.pk }}">
+                                <label class="sr-only" for="legacy-email-{{ account.pk }}">Correo institucional</label>
+                                <input id="legacy-email-{{ account.pk }}" name="correo_institucional" type="email" value="{{ account.email }}" placeholder="correo@comunidad.unam.mx" required>
+                                <label class="sr-only" for="legacy-account-{{ account.pk }}">Número de cuenta opcional</label>
+                                <input id="legacy-account-{{ account.pk }}" name="numero_cuenta" inputmode="numeric" placeholder="Número de cuenta (opcional)">
+                                <label class="sr-only" for="legacy-role-{{ account.pk }}">Rol</label>
+                                <select id="legacy-role-{{ account.pk }}" name="rol_id" aria-label="Rol para {{ account_label }}" required>{% for role in roles %}<option value="{{ role.pk }}">{{ role.nombre }}</option>{% endfor %}</select>
+                                <button type="submit">Asignar rol</button>
+                            </form>
+                            {% endif %}
                         </td>
                     </tr>
+                    {% endwith %}
                     {% empty %}
                     <tr><td colspan="5" class="admin-empty">No se encontraron usuarios con esos filtros.</td></tr>
                     {% endfor %}

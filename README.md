@@ -5,6 +5,9 @@ SQLite en desarrollo o PostgreSQL en despliegue.
 Cada usuario puede crear proyectos de animación, agregar cuadros de texto y
 usar imágenes de las galerías de **Elementos** y **Fondos**.
 
+© 2026 Salvador Lugo Rivero y Luis Arturo Muños Clavel. Todos los derechos
+reservados.
+
 ## Ejecutar en Windows (PowerShell)
 
 ```powershell

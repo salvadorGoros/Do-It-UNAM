@@ -313,6 +313,66 @@ class ProyectoTests(TestCase):
         self.client.force_login(self.otro)
         self.assertEqual(self.client.get(dashboard_url).status_code, 403)
 
+    def test_panel_administracion_muestra_cuentas_anteriores_sin_perfil(self):
+        PerfilUsuario.objects.create(
+            usuario=self.usuario,
+            rol=Rol.objects.get(clave=Rol.Clave.ADMINISTRADOR),
+            correo_institucional="ana@comunidad.unam.mx",
+        )
+        legacy_user = get_user_model().objects.create_user("cuenta-anterior")
+        dashboard_url = reverse("editor:administracion")
+
+        response = self.client.get(dashboard_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, legacy_user.username)
+        self.assertContains(response, "Cuenta anterior sin perfil institucional")
+        self.assertContains(response, "Faltan datos institucionales")
+        self.assertEqual(response.context["total_users"], get_user_model().objects.count())
+        self.assertEqual(
+            response.context["page_obj"].paginator.count,
+            get_user_model().objects.count(),
+        )
+        self.assertEqual(
+            self.client.get(dashboard_url, {"q": "cuenta-anterior"}).context["page_obj"].paginator.count,
+            1,
+        )
+
+    def test_panel_administracion_asigna_rol_a_cuenta_anterior(self):
+        PerfilUsuario.objects.create(
+            usuario=self.usuario,
+            rol=Rol.objects.get(clave=Rol.Clave.ADMINISTRADOR),
+            correo_institucional="ana@comunidad.unam.mx",
+        )
+        legacy_user = get_user_model().objects.create_user("cuenta-anterior")
+        dashboard_url = reverse("editor:administracion")
+        teacher = Rol.objects.get(clave=Rol.Clave.DOCENTE)
+
+        response = self.client.post(dashboard_url, {
+            "accion": "asignar_rol_usuario",
+            "usuario_id": legacy_user.pk,
+            "rol_id": teacher.pk,
+            "correo_institucional": "docente@comunidad.unam.mx",
+            "numero_cuenta": "31-2345-682",
+        })
+
+        self.assertRedirects(response, dashboard_url)
+        profile = PerfilUsuario.objects.get(usuario=legacy_user)
+        self.assertEqual(profile.rol, teacher)
+        self.assertEqual(profile.correo_institucional, "docente@comunidad.unam.mx")
+        self.assertEqual(profile.numero_cuenta, "312345682")
+
+        invalid_user = get_user_model().objects.create_user("correo-invalido")
+        response = self.client.post(dashboard_url, {
+            "accion": "asignar_rol_usuario",
+            "usuario_id": invalid_user.pk,
+            "rol_id": teacher.pk,
+            "correo_institucional": "persona@example.com",
+            "numero_cuenta": "",
+        }, follow=True)
+        self.assertContains(response, "Usa un correo institucional válido")
+        self.assertFalse(PerfilUsuario.objects.filter(usuario=invalid_user).exists())
+
     @override_settings(GEMINI_API_KEY="prueba")
     def test_estado_ia_usa_cuota_configurable_del_rol(self):
         teacher = Rol.objects.get(clave=Rol.Clave.DOCENTE)

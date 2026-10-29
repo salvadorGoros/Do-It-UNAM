@@ -13,6 +13,7 @@ a { color: #0b3b60; }
 .admin-access svg { width: 17px; height: 17px; flex: 0 0 auto; }
 .admin-access:hover { color: white; background: #0b527c; transform: translateY(-1px); }
 .page { max-width: 1100px; margin: 40px auto; padding: 0 24px; }
+.site-footer { padding: 24px; color: #64748b; font-size: 12px; text-align: center; }
 h1 { color: #0b3b60; margin-bottom: 8px; }
 h2 { font-size: 18px; margin-top: 0; }
 .muted { color: #64748b; }
@@ -609,6 +610,8 @@ button:hover { background: #164e78; }
 .change-role-form { display: grid; grid-template-columns: minmax(105px, 1fr) auto; gap: 6px; }
 .change-role-form select { min-height: 34px; border: 1px solid #c9d6dc; border-radius: 7px; background: white; padding: 6px; font: inherit; font-size: 10px; }
 .change-role-form button { min-height: 34px; padding: 6px 9px; font-size: 9px; }
+.legacy-role-form { grid-template-columns: minmax(150px, 1fr) minmax(100px, .7fr); }
+.legacy-role-form input { min-width: 0; min-height: 34px; border: 1px solid #c9d6dc; border-radius: 7px; background: white; padding: 6px; font: inherit; font-size: 10px; }
 .admin-empty { padding: 36px !important; color: #71838e !important; text-align: center; }
 .admin-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 15px; color: #6d818d; font-size: 10px; }
 .admin-pagination a { border: 1px solid #cad7dd; border-radius: 7px; background: white; padding: 6px 9px; font-weight: 700; text-decoration: none; }
@@ -652,6 +655,7 @@ button:hover { background: #164e78; }
     .admin-users-table td:first-child::before { display: none; }
     .user-cell strong { max-width: 64vw; }
     .change-role-form { min-width: 0; }
+    .legacy-role-form { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 400px) {
     .admin-filters { grid-template-columns: 1fr; }
